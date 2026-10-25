@@ -112,7 +112,7 @@ enum WebSelfTest {
         if let i = task.steps.lastIndex(where: { if case .click = $0.kind { return true }; return false }) {
             let risk = task.risk(at: i)
             log.check("Submit is recognised as a risky step", risk.risk == .risky, risk.reason ?? "")
-            log.check("Recorded what Submit changed", task.steps[i].expect?.appeared?.isEmpty == false,
+            log.check("Recorded what Submit changed", task.steps[i].expect.map { !$0.appeared.isEmpty } == true,
                       task.steps[i].expect?.summary ?? "nothing")
         }
         guard acted, recorded.submits == 1, clicks.count == 3 else {
