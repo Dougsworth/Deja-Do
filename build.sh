@@ -4,6 +4,7 @@
 #        ./build.sh run      build, then open the app
 #        ./build.sh test     run the engine's unit tests
 #        ./build.sh release  sign with Developer ID, notarize, and zip it to send to people
+#        ./build.sh selftest build, install, then drive Calculator end to end (results in self-test.txt)
 #
 # Release needs the paid Apple Developer Program, a "Developer ID Application"
 # certificate (Xcode › Settings › Accounts › Manage Certificates › +), and the
@@ -66,7 +67,7 @@ else
 fi
 
 echo "Built $APP"
-if [ "${1:-}" = "run" ]; then
+if [ "${1:-}" = "run" ] || [ "${1:-}" = "selftest" ]; then
   # Install to /Applications, where Spotlight, Launchpad and other tools look
   # first. Falls back to ~/Applications if this account can't write there.
   pkill -x DejaDo 2>/dev/null || true
@@ -78,5 +79,14 @@ if [ "${1:-}" = "run" ]; then
   # An older copy in the other folder would show up twice in Spotlight.
   if [ "$DEST" = "/Applications" ] && [ -d "$HOME/Applications/Deja Do.app" ]; then rm -rf "$HOME/Applications/Deja Do.app"; fi
   echo "Installed to $DEST/Deja Do.app"
+  if [ "${1:-}" = "selftest" ]; then
+    OUT="$PWD/self-test.txt"
+    rm -f "$OUT"
+    echo "Running the self test. Don't touch the mouse or keyboard for about a minute."
+    open -W -n "$DEST/Deja Do.app" --args --self-test "$OUT" || true
+    cat "$OUT" 2>/dev/null || echo "No results were written. Check that Deja Do has Accessibility and Input Monitoring."
+    grep -q "ALL PASSED" "$OUT" 2>/dev/null
+    exit $?
+  fi
   open "$DEST/Deja Do.app"
 fi

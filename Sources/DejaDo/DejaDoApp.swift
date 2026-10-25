@@ -4,6 +4,10 @@ import DejaDoCore
 
 /// Opens .dejado files double-clicked in Finder or dropped on the app.
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        if SelfTest.requested { SelfTest.start() }
+    }
+
     func application(_ application: NSApplication, open urls: [URL]) {
         AppModel.shared.importFiles(urls)
         NSApp.activate(ignoringOtherApps: true)
