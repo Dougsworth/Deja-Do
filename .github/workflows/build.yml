@@ -1,0 +1,28 @@
+name: Build and test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: swift --version
+
+      - name: Test the matching engine
+        run: swift test
+
+      - name: Build the app
+        run: ./build.sh
+
+      - name: Upload app
+        uses: actions/upload-artifact@v4
+        with:
+          name: Deja-Do-app
+          path: build/Deja Do.app
+          retention-days: 14
