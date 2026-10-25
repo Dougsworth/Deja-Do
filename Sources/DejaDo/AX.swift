@@ -143,6 +143,16 @@ enum AX {
         return NSApp.windows.contains { $0.isVisible && $0.frame.contains(flipped) }
     }
 
+    /// Frame of the window under a screen point, or else of the front app's focused window.
+    static func windowFrame(at point: CGPoint) -> CGRect? {
+        if let hit = element(at: point), let w = element(hit, kAXWindowAttribute), let f = frame(w) { return f }
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return nil }
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(appElement, 0.5)
+        return element(appElement, kAXFocusedWindowAttribute).flatMap { frame($0) }
+    }
+
     /// Role used for clicks recorded only by where they landed in the window.
     static let positionRole = "AXPosition"
 

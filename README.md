@@ -26,6 +26,8 @@ The first time, Deja Do asks for two permissions in System Settings › Privacy 
 
 Switch both on, then quit and reopen Deja Do.
 
+A third one is optional: **Screen Recording** lets Deja Do look at the screen itself, for apps that don't describe their buttons and for checking each step. Turn it on from Settings (the gear in the sidebar).
+
 If you have an Apple Development certificate, `build.sh` signs with it and the permissions stick across rebuilds. Without one it signs ad hoc, and macOS treats every build as a new app, so you have to remove and re-add Deja Do in both lists after rebuilding.
 
 ## How it finds things again
@@ -55,9 +57,30 @@ Position is predicted. The labelled neighbours vote on how far the area around t
 
 **Waiting.** Instead of fixed pauses, Deja Do fingerprints the window's accessibility tree and moves on as soon as it stops changing and no spinner is showing.
 
+## When an app doesn't describe its buttons
+
+Canvas apps, games, custom drawn UIs and virtual machine windows tell Accessibility little or nothing. With Screen Recording allowed, every click also keeps a 64 point greyscale picture of the spot and the text around it, read with Apple's Vision framework. On replay, the spot is proposed three ways and every proposal is scored on all the evidence:
+
+| Signal | How it's measured |
+| --- | --- |
+| Label | The text the click landed on, found again by OCR, with the click kept at the same distance from the label's left edge |
+| Nearby text | Lines of text around the click vote on how far things moved, like the anchors above |
+| Picture | Normalised cross correlation of the recorded picture, coarse to fine, at three sizes. A detail only score keeps lookalike icons apart, and it ignores tints and dark mode |
+| Position | Distance from where the spot should be after the window moved or resized |
+
+The decision works like the accessibility engine: it clicks only when the best spot is strong and clearly ahead of the next distinct one, so two identical "Reply" buttons are never guessed between. The screen is used first for clicks recorded only by position and for clicks on one huge unlabelled element (a VM's guest screen). For everything else it is a fallback tried before asking the AI.
+
+## Checking each step
+
+Recording notes how the screen changed after every click and key press: text that appeared (a chat's header now showing the person you clicked), text that went away (a closed dialog), a new window title or app, or just that the pixels changed. Clocks, "2 min ago", "typing…" and counters are ignored. Each step shows what it expects in the step list.
+
+On a run, the screen is read before and after each of those steps and compared. If it doesn't match, Deja Do waits a little in case the app is slow. If nothing changed at all, it tries the step once more. If the screen changed in some other way it never repeats the step, because a second click could undo a toggle or send something twice, and stops instead with what it expected to see. Each step can be set to try again then stop (the default), stop right away, or keep going.
+
+Only a few short labels are kept for this, never a copy of the screen. When a task types from {{variables}} or asks each run, text that came from typing isn't expected to show up again.
+
 ## AI repair
 
-Add an Anthropic API key in Settings (the gear in the sidebar). Only a text list of the window's elements is sent: roles, labels and positions. Never a screenshot and never what you typed. The fixed step is saved, so the next run is fast again.
+Add an Anthropic API key in Settings (the gear in the sidebar). Only a text list of the window's elements is sent: roles, labels and positions. Never a screenshot or the recorded pictures, and never what you typed. The fixed step is saved, so the next run is fast again.
 
 ## Project layout
 
@@ -65,6 +88,10 @@ Add an Anthropic API key in Settings (the gear in the sidebar). Only a text list
 | --- | --- |
 | `Sources/DejaDoCore/MatchEngine.swift` | Scoring, position prediction, anchor consensus, decisions, learning |
 | `Sources/DejaDoCore/TextSimilarity.swift` | Fuzzy label matching |
+| `Sources/DejaDoCore/VisualMatch.swift` | Finding a spot again by its label, nearby text and picture |
+| `Sources/DejaDoCore/TemplateSearch.swift` | Coarse to fine picture matching |
+| `Sources/DejaDoCore/GrayImage.swift` | Small greyscale pictures, resizing and filters |
+| `Sources/DejaDoCore/StepCheck.swift` | What a step changed, checking it on a run, retry decisions |
 | `Sources/DejaDoCore/Settle.swift` | Knowing when a window has finished changing |
 | `Sources/DejaDoCore/Model.swift` | Steps, automations, saving |
 | `Sources/DejaDo/AX.swift` | Accessibility: batched attribute reads, tree walks, recording anchors |
@@ -72,12 +99,15 @@ Add an Anthropic API key in Settings (the gear in the sidebar). Only a text list
 | `Sources/DejaDo/Replayer.swift` | Runs steps, waits for screens to settle, calls the AI and learns |
 | `Sources/DejaDo/Recorder.swift` | Event tap for clicks and keys |
 | `Sources/DejaDo/AIRepair.swift` | The Claude request |
-| `Tests/DejaDoCoreTests` | Engine tests |
+| `Sources/DejaDo/ScreenVision.swift` | ScreenCaptureKit capture, Vision text reading, before and after reads |
+| `Tests/DejaDoCoreTests` | Engine, vision and step checking tests. They also run on Linux |
 
 Automations are saved as JSON in `~/Library/Application Support/Deja Do/Automations`. Anything recorded while the app was called Once is copied over on first launch.
 
 ## Known limits
 
 - Drags, scrolling and hover menus aren't recorded yet
-- Some custom drawn apps (games, canvas editors) expose little to Accessibility, so only position and anchor matching works there
+- Without Screen Recording, custom drawn apps (games, canvas editors, VMs) fall back to clicking the recorded position
+- The picture for a click is taken just after the mouse goes down, so a button that changes colour the instant it's pressed is matched mostly on its shape and surroundings
+- Recorded pictures are saved inside the task and travel with exported .dejado files
 - Steps run in order with no loops or variables yet. "Ask each run" on a typing step is the first kind of input

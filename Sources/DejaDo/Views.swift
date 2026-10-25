@@ -625,6 +625,26 @@ struct StepRow: View {
             Text("Type {{name}} anywhere to fill it in each run, or from a spreadsheet column.")
                 .font(.rounded(10))
                 .foregroundStyle(.tertiary)
+        case .click, .key:
+            if let line = step.expect?.summary {
+                HStack(spacing: 8) {
+                    Text(line)
+                        .font(.rounded(10))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                    Text("If not")
+                        .font(.rounded(10))
+                        .foregroundStyle(.tertiary)
+                    Picker("If not", selection: mismatch) {
+                        ForEach(MismatchPolicy.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .controlSize(.mini)
+                    .fixedSize()
+                }
+                .padding(.top, 2)
+            }
         case .wait:
             Stepper(value: waitSeconds, in: 0.5...60, step: 0.5) {
                 Text("\(waitSeconds.wrappedValue, specifier: "%g") seconds")
@@ -657,6 +677,13 @@ struct StepRow: View {
                     step.kind = .type(text: t, askEachRun: new, secret: s, prompt: p)
                 }
             }
+        )
+    }
+
+    private var mismatch: Binding<MismatchPolicy> {
+        Binding(
+            get: { step.onMismatch ?? .default },
+            set: { step.onMismatch = $0 == .default ? nil : $0 }
         )
     }
 
@@ -916,6 +943,30 @@ struct SettingsView: View {
 
             Divider()
 
+            toggle("Check that each step worked", isOn: $model.checkSteps,
+                   note: "After each click or key press, looks for what changed when you recorded it, like the name you clicked showing up in the header. Waits, tries once more if nothing happened, then stops.")
+
+            Divider()
+
+            toggle("Use the screen when an app doesn't describe its buttons", isOn: $model.useVision,
+                   note: "For canvas apps, games and virtual machines. Keeps a small picture and the text around each click, read on your Mac and never sent anywhere.")
+            if model.useVision && !model.hasScreenRecording {
+                HStack {
+                    Text("Needs Screen Recording permission.")
+                        .font(.rounded(11))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Open Settings") {
+                        ScreenVision.requestPermission()
+                        ScreenVision.openSettings()
+                    }
+                    .buttonStyle(QuietButtonStyle(compact: true))
+                }
+                .padding(.bottom, 14)
+            }
+
+            Divider()
+
             field("Anthropic API key",
                   note: "Kept in your keychain. Only a text list of the window's buttons and labels is sent, never your screen or what you typed.") {
                 SecureField("sk-ant-…", text: $model.apiKey)
@@ -947,6 +998,18 @@ struct SettingsView: View {
         .padding(26)
         .frame(width: 460)
         .fontDesign(.rounded)
+    }
+
+    private func toggle(_ title: String, isOn: Binding<Bool>, note: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle(title, isOn: isOn)
+                .font(.rounded(13))
+            Text(note)
+                .font(.rounded(11))
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 14)
     }
 
     private func field<F: View>(_ title: String, note: String?, @ViewBuilder input: () -> F) -> some View {

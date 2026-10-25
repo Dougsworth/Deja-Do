@@ -5,7 +5,8 @@ let package = Package(
     name: "DejaDo",
     platforms: [.macOS(.v13)],
     targets: [
-        // The matching engine and data model. No AppKit, so it is fully unit tested.
+        // The matching engines, step checking and data model. No AppKit, so it is
+        // fully unit tested, and the tests also run on Linux.
         .target(
             name: "DejaDoCore",
             path: "Sources/DejaDoCore"
@@ -18,7 +19,9 @@ let package = Package(
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("ApplicationServices"),
-                .linkedFramework("Security")
+                .linkedFramework("Security"),
+                .linkedFramework("ScreenCaptureKit"),
+                .linkedFramework("Vision")
             ]
         ),
         .testTarget(

@@ -12,12 +12,28 @@ final class Recorder {
     /// Called on the main thread whenever the recording changes.
     var onChange: (() -> Void)?
 
+    /// Also remember what the screen looked like around each click, for apps
+    /// that don't describe their buttons. Needs Screen Recording permission.
+    var visionEnabled = false
+    /// Note how the screen changed after each click and key press, so runs can check it.
+    var checkSteps = true
+
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var activationObserver: NSObjectProtocol?
     private var lastBundleID: String?
     private var inSecureField = false
     private let ownPID = ProcessInfo.processInfo.processIdentifier
+
+    // Screen reads happen off the main thread and land here later.
+    private let work = DispatchGroup()
+    private var generation = 0
+    private var snapshots: [Int: ScreenState] = [:]
+    private var snapshotCount = 0
+    /// A click or key step waiting for its "after" read: the read taken at the next action.
+    private var pendingCheck: (stepID: UUID, before: Int)?
+    private var checkPairs: [(stepID: UUID, before: Int, after: Int)] = []
+    private var lastExternalPID: pid_t?
 
     /// Returns false if macOS refused the event tap (missing Input Monitoring permission).
     func start() -> Bool {
@@ -26,6 +42,12 @@ final class Recorder {
         pendingText = ""
         lastBundleID = nil
         inSecureField = false
+        generation += 1
+        snapshots = [:]
+        snapshotCount = 0
+        pendingCheck = nil
+        checkPairs = []
+        lastExternalPID = nil
 
         let mask: CGEventMask =
             (1 << CGEventType.leftMouseDown.rawValue) |
@@ -61,7 +83,26 @@ final class Recorder {
         return true
     }
 
-    /// Stops listening and returns the finished steps.
+    /// Stops listening, waits briefly for screen reads still in flight, then
+    /// hands back the steps with their visual records and expectations filled in.
+    func finish(_ completion: @escaping ([Step]) -> Void) {
+        guard isRecording else { completion(steps); return }
+        flushText()
+        // The screen as it was left is the last step's "after".
+        closePendingCheck(at: snapshot())
+        stop()
+        let group = work, gen = generation
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            _ = group.wait(timeout: .now() + 4)
+            DispatchQueue.main.async {
+                guard let self, self.generation == gen else { return }
+                self.applyExpectations()
+                completion(self.steps)
+            }
+        }
+    }
+
+    /// Stops listening and returns the steps as they are. Used to discard.
     @discardableResult
     func stop() -> [Step] {
         guard isRecording else { return steps }
@@ -100,6 +141,12 @@ final class Recorder {
         let point = event.location
         let clickState = Int(event.getIntegerValueField(.mouseEventClickState))
         if AX.isOwn(at: point) { return }
+        // Start reading the screen before anything else, while it still shows
+        // the previous step's result: most apps react when the button comes back up.
+        // The second half of a double click is part of the same step, so it isn't a boundary.
+        let shot = clickState >= 2 ? nil : snapshot()
+        let stepID = UUID()
+        if visionEnabled, clickState < 2 { recordVisual(stepID: stepID, at: point) }
         // If the app won't describe what was clicked, keep the click anyway as a
         // position inside its window rather than silently losing a step.
         guard let capture = AX.capture(at: point) ?? AX.positionCapture(at: point) else { return }
@@ -116,9 +163,14 @@ final class Recorder {
             return
         }
 
+        // That read is the previous step's result and this step's starting point.
+        closePendingCheck(at: shot)
+
         noteApp(id: target.bundleID, name: target.appName)
         let mods = event.flags.rawValue & Input.modifierMask
-        steps.append(Step(kind: .click(target: target, button: button, count: 1, modifiers: mods)))
+        let step = Step(id: stepID, kind: .click(target: target, button: button, count: 1, modifiers: mods))
+        steps.append(step)
+        if !capture.isSecureField, let shot { pendingCheck = (step.id, shot) }
         if capture.isSecureField {
             // Never record passwords. Ask for it when the automation runs instead.
             steps.append(Step(kind: .type(text: "", askEachRun: true, secret: true,
@@ -136,6 +188,8 @@ final class Recorder {
 
         if !commandLike, !KeyNames.special.contains(code), let chars = ns?.characters, isPrintable(chars) {
             if inSecureField { return }
+            // Typing starts: whatever the last click or key did is done by now.
+            if pendingText.isEmpty, pendingCheck != nil { closePendingCheck(at: snapshot()) }
             noteFrontApp()
             pendingText += chars
             onChange?()
@@ -149,9 +203,13 @@ final class Recorder {
         }
 
         flushText()
+        let shot = snapshot()
+        closePendingCheck(at: shot)
         noteFrontApp()
         let label = KeyNames.label(code: code, flags: flags, chars: ns?.charactersIgnoringModifiers)
-        steps.append(Step(kind: .key(code: code, modifiers: flags.rawValue & Input.modifierMask, label: label)))
+        let step = Step(kind: .key(code: code, modifiers: flags.rawValue & Input.modifierMask, label: label))
+        steps.append(step)
+        if !inSecureField, let shot { pendingCheck = (step.id, shot) }
         if code == 48 || code == 36 || code == 76 { inSecureField = false }
         onChange?()
     }
@@ -167,6 +225,76 @@ final class Recorder {
         guard !pendingText.isEmpty else { return }
         steps.append(Step(kind: .type(text: pendingText, askEachRun: false, secret: false, prompt: "")))
         pendingText = ""
+    }
+
+    // MARK: Screen reads
+
+    /// Starts reading the front window in the background and returns the
+    /// read's number. Returns nil when step checking is off.
+    private func snapshot() -> Int? {
+        guard checkSteps else { return nil }
+        if let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier != ownPID {
+            lastExternalPID = front.processIdentifier
+        }
+        guard let pid = lastExternalPID else { return nil }
+        let index = snapshotCount
+        snapshotCount += 1
+        let vision = visionEnabled, gen = generation
+        work.enter()
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let state = await ScreenStateReader.read(pid: pid, ocr: vision, pixels: vision)
+            DispatchQueue.main.async {
+                if let self, self.generation == gen { self.snapshots[index] = state }
+                self?.work.leave()
+            }
+        }
+        return index
+    }
+
+    private func closePendingCheck(at after: Int?) {
+        defer { pendingCheck = nil }
+        guard let p = pendingCheck, let after else { return }
+        checkPairs.append((p.stepID, p.before, after))
+    }
+
+    /// Captures the window around a click and reads its text, then attaches
+    /// the result to the click step with that ID when it's ready.
+    private func recordVisual(stepID: UUID, at point: CGPoint) {
+        guard let wf = AX.windowFrame(at: point) else { return }
+        let gen = generation
+        work.enter()
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let read = await ScreenVision.read(windowFrame: wf, ocr: true)
+            let visual = read.map {
+                VisualTarget.make(window: $0.image, lines: $0.lines,
+                                  click: CGPoint(x: point.x - wf.minX, y: point.y - wf.minY), windowSize: wf.size)
+            }
+            DispatchQueue.main.async {
+                defer { self?.work.leave() }
+                // The step may not exist: the click was on Deja Do, or it joined a double click.
+                guard let self, self.generation == gen, let visual,
+                      let i = self.steps.firstIndex(where: { $0.id == stepID }),
+                      case .click(var t, let b, let c, let m) = self.steps[i].kind, !t.inMenu else { return }
+                t.visual = visual
+                self.steps[i].kind = .click(target: t, button: b, count: c, modifiers: m)
+                self.onChange?()
+            }
+        }
+    }
+
+    /// Turns each before and after pair into the step's expectation.
+    private func applyExpectations() {
+        let typed: [String] = steps.compactMap {
+            if case .type(let text, let ask, let secret, _) = $0.kind, !ask, !secret { return text }
+            return nil
+        }
+        for pair in checkPairs {
+            guard let before = snapshots[pair.before], let after = snapshots[pair.after],
+                  let i = steps.firstIndex(where: { $0.id == pair.stepID }) else { continue }
+            let e = StepExpectation.derive(before: before, after: after, typed: typed)
+            // Nothing changed when recording, so there is nothing to confirm on a run.
+            steps[i].expect = e.changed ? e : nil
+        }
     }
 
     /// Adds a "switch to app" step whenever the user starts working in a different app.

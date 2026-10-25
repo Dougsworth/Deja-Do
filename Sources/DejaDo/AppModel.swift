@@ -37,10 +37,17 @@ final class AppModel: ObservableObject, @unchecked Sendable {
 
     @Published var hasAccessibility = Permissions.accessibility
     @Published var hasInputMonitoring = Permissions.inputMonitoring
+    /// Optional. Lets Deja Do look at the screen for apps that don't describe their buttons.
+    @Published var hasScreenRecording = ScreenVision.hasPermission
+    @Published var isFinishingRecording = false
 
     @Published var aiEnabled: Bool { didSet { UserDefaults.standard.set(aiEnabled, forKey: "aiEnabled") } }
     @Published var model: String { didSet { UserDefaults.standard.set(model, forKey: "model") } }
     @Published var apiKey: String { didSet { Keychain.set(apiKey, for: "anthropic") } }
+    /// Record and match on what the screen looks like, when Screen Recording is allowed.
+    @Published var useVision: Bool { didSet { UserDefaults.standard.set(useVision, forKey: "useVision") } }
+    /// Confirm each step changed the screen the way it did when recorded.
+    @Published var checkSteps: Bool { didSet { UserDefaults.standard.set(checkSteps, forKey: "checkSteps") } }
 
     private let persistence = Persistence()
     private let weightStore = WeightStore()
@@ -58,6 +65,8 @@ final class AppModel: ObservableObject, @unchecked Sendable {
         aiEnabled = defaults.object(forKey: "aiEnabled") as? Bool ?? true
         model = defaults.string(forKey: "model") ?? Self.defaultModel
         apiKey = Keychain.get("anthropic") ?? ""
+        useVision = defaults.object(forKey: "useVision") as? Bool ?? true
+        checkSteps = defaults.object(forKey: "checkSteps") as? Bool ?? true
         automations = persistence.loadAll()
         weights = weightStore.load()
         selection = automations.first?.id
@@ -75,9 +84,10 @@ final class AppModel: ObservableObject, @unchecked Sendable {
     var permissionsReady: Bool { hasAccessibility && hasInputMonitoring }
 
     func refreshPermissions() {
-        let a = Permissions.accessibility, i = Permissions.inputMonitoring
+        let a = Permissions.accessibility, i = Permissions.inputMonitoring, s = ScreenVision.hasPermission
         if a != hasAccessibility { hasAccessibility = a }
         if i != hasInputMonitoring { hasInputMonitoring = i }
+        if s != hasScreenRecording { hasScreenRecording = s }
     }
 
     // MARK: Recording
@@ -86,11 +96,13 @@ final class AppModel: ObservableObject, @unchecked Sendable {
     @discardableResult
     func startRecording() -> Bool {
         refreshPermissions()
-        guard permissionsReady, runningID == nil else {
+        guard permissionsReady, runningID == nil, !isFinishingRecording else {
             if !hasAccessibility { Permissions.requestAccessibility() }
             if !hasInputMonitoring { Permissions.requestInputMonitoring() }
             return false
         }
+        recorder.visionEnabled = visionActive
+        recorder.checkSteps = checkSteps
         guard recorder.start() else {
             status = "macOS blocked recording. Check Input Monitoring in System Settings."
             return false
@@ -100,9 +112,21 @@ final class AppModel: ObservableObject, @unchecked Sendable {
         return true
     }
 
+    /// Vision is on and macOS allows it.
+    var visionActive: Bool { useVision && hasScreenRecording }
+
     func stopRecording() {
-        let steps = recorder.stop()
+        guard !isFinishingRecording else { return }
         isRecording = false
+        isFinishingRecording = true
+        status = "Saving…"
+        recorder.finish { [weak self] steps in
+            self?.isFinishingRecording = false
+            self?.saveRecording(steps)
+        }
+    }
+
+    private func saveRecording(_ steps: [Step]) {
         guard !steps.isEmpty else { status = "Nothing was recorded."; return }
         let formatter = DateFormatter()
         formatter.dateFormat = "MMM d, h:mm a"
@@ -186,8 +210,10 @@ final class AppModel: ObservableObject, @unchecked Sendable {
         status = "Running \(automation.name)…"
         startEscapeMonitor()
 
+        refreshPermissions()
         let settings = Replayer.Settings(apiKey: apiKey, model: model.isEmpty ? Self.defaultModel : model,
-                                         aiEnabled: aiEnabled, weights: weights)
+                                         aiEnabled: aiEnabled, weights: weights,
+                                         visionEnabled: visionActive, checkSteps: checkSteps)
         let id = automation.id
         let callbacks = Replayer.Callbacks(
             progress: { [weak self] i in DispatchQueue.main.async { self?.runningStep = i } },

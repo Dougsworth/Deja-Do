@@ -59,11 +59,15 @@ public struct ElementLocator: Codable, Equatable {
     public var context: [String]?
     /// Window size when recorded, used to predict where right or bottom aligned controls moved.
     public var windowSize: CGSize?
+    /// A picture of the spot and the text around it, for apps that don't
+    /// describe their buttons. Optional so older automations still load.
+    public var visual: VisualTarget?
 
     public init(bundleID: String, appName: String, windowTitle: String?, role: String, subrole: String?,
                 title: String?, desc: String?, identifier: String?, help: String?, value: String?,
                 label: String?, path: [PathStep], frameInWindow: CGRect?, clickOffset: CGPoint,
-                inMenu: Bool, anchors: [Anchor]? = nil, context: [String]? = nil, windowSize: CGSize? = nil) {
+                inMenu: Bool, anchors: [Anchor]? = nil, context: [String]? = nil, windowSize: CGSize? = nil,
+                visual: VisualTarget? = nil) {
         self.bundleID = bundleID
         self.appName = appName
         self.windowTitle = windowTitle
@@ -82,6 +86,7 @@ public struct ElementLocator: Codable, Equatable {
         self.anchors = anchors
         self.context = context
         self.windowSize = windowSize
+        self.visual = visual
     }
 
     public var hasText: Bool {
@@ -103,10 +108,17 @@ public enum MouseButtonKind: String, Codable {
 public struct Step: Identifiable, Codable, Equatable {
     public var id = UUID()
     public var kind: Kind
+    /// How the screen changed after this step when it was recorded, so a run
+    /// can confirm the step worked. Optional so older automations still load.
+    public var expect: StepExpectation?
+    /// What to do when the screen doesn't change the way it did. nil means the default.
+    public var onMismatch: MismatchPolicy?
 
-    public init(id: UUID = UUID(), kind: Kind) {
+    public init(id: UUID = UUID(), kind: Kind, expect: StepExpectation? = nil, onMismatch: MismatchPolicy? = nil) {
         self.id = id
         self.kind = kind
+        self.expect = expect
+        self.onMismatch = onMismatch
     }
 
     public enum Kind: Codable, Equatable {
@@ -166,6 +178,9 @@ extension Step {
             return "Switch to \(name)"
         case .click(let t, let button, let count, _):
             let verb = count >= 2 ? "Double click" : (button == .right ? "Right click" : "Click")
+            if t.role == "AXPosition", let seen = t.visual?.clickedText?.text, !seen.isEmpty {
+                return "\(verb) “\(seen.prefix(60))” on screen"
+            }
             if t.role == "AXPosition", let f = t.frameInWindow {
                 return "\(verb) at \(Int(f.midX)), \(Int(f.midY)) in the window"
             }

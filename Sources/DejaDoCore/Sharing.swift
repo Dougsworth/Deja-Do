@@ -56,7 +56,11 @@ public struct TaskFile: Codable {
         var a = file.automation
         a.id = UUID()
         a.created = now
-        a.steps = a.steps.map { Step(id: UUID(), kind: $0.kind) }
+        a.steps = a.steps.map { step in
+            var copy = step
+            copy.id = UUID()
+            return copy
+        }
         return a
     }
 }
