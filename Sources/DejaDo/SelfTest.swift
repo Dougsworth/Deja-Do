@@ -87,7 +87,8 @@ enum SelfTest {
             _ = r.start()
             return r
         }
-        try? await Task.sleep(nanoseconds: 400_000_000)
+        // Give the recorder a first look at the screen, as a person switching to the app would.
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
         var pressedAll = true
         for keys in [["7", "seven"], ["+", "add", "plus"], ["8", "eight"], ["=", "equals", "equal"]] {
             pressedAll = await press(keys) && pressedAll
@@ -147,11 +148,12 @@ enum SelfTest {
                 t.path = []; t.anchors = nil; t.context = nil
                 screenOnly.steps[i].kind = .click(target: t, button: b, count: c, modifiers: m)
             }
-            let home = window().flatMap { AX.frame($0) }?.origin
-            if let home { moveWindow(to: CGPoint(x: home.x + 160, y: home.y + 90)) }
-            try? await Task.sleep(nanoseconds: 500_000_000)
+            let before = window().flatMap { AX.frame($0) }
+            if let f = before { await dragWindow(f, by: CGVector(dx: 160, dy: 90)) }
+            let after = window().flatMap { AX.frame($0) }
+            log.line("      window moved from \(describe(before)) to \(describe(after))")
             await replay(screenOnly, name: "Screen only replay after moving the window", expect: "15", vision: true, log: log)
-            if let home { moveWindow(to: home) }
+            if let f = after { await dragWindow(f, by: CGVector(dx: -160, dy: -90)) }
 
             await setMode(basic: false)
             await replay(screenOnly, name: "Screen only replay in Scientific layout", expect: "15", vision: true,
@@ -171,12 +173,37 @@ enum SelfTest {
         log.line("      notes: \(notes)")
     }
 
-    static func moveWindow(to point: CGPoint) {
-        guard let w = window() else { return }
-        var p = point
-        if let value = AXValueCreate(.cgPoint, &p) {
-            AXUIElementSetAttributeValue(w, kAXPositionAttribute as CFString, value)
+    /// Moves the window the way a person does: dragging its title bar.
+    static func dragWindow(_ frame: CGRect, by d: CGVector) async {
+        NSRunningApplication.runningApplications(withBundleIdentifier: calculatorID).first?
+            .activate(options: [.activateIgnoringOtherApps])
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        let start = CGPoint(x: frame.midX, y: frame.minY + 12)
+        let source = Input.source
+        func post(_ type: CGEventType, _ p: CGPoint) {
+            CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: p, mouseButton: .left)?
+                .post(tap: .cghidEventTap)
         }
+        post(.mouseMoved, start)
+        usleep(80_000)
+        post(.leftMouseDown, start)
+        usleep(80_000)
+        for i in 1...20 {
+            let f = CGFloat(i) / 20
+            post(.leftMouseDragged, CGPoint(x: start.x + d.dx * f, y: start.y + d.dy * f))
+            usleep(15_000)
+        }
+        post(.leftMouseUp, CGPoint(x: start.x + d.dx, y: start.y + d.dy))
+        try? await Task.sleep(nanoseconds: 600_000_000)
+    }
+
+    static func describe(_ f: CGRect?) -> String {
+        guard let f else {
+            let app = NSRunningApplication.runningApplications(withBundleIdentifier: calculatorID).first
+            let count = app.map { AX.elements(AX.raw(AXUIElementCreateApplication($0.processIdentifier), kAXWindowsAttribute)).count }
+            return "nowhere (Calculator \(app == nil ? "not running" : "has \(count ?? 0) windows"), front app \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "none"))"
+        }
+        return "\(Int(f.minX)),\(Int(f.minY)) \(Int(f.width))×\(Int(f.height))"
     }
 
     static func runTask(_ a: Automation, vision: Bool) async -> (error: String?, notes: String) {

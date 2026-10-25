@@ -200,7 +200,9 @@ final class Replayer {
                let read = await ScreenVision.read(windowFrame: wf, ocr: visual.clickedText != nil || !visual.nearby.isEmpty) {
                 let report = matcher.match(visual, window: read.image, lines: read.lines, windowSize: wf.size)
                 if case .confident(let best) = report.decision {
-                    note(stepIndex, "Found on screen \(Self.describe(best, visual)) · \(Int((best.score * 100).rounded()))% match")
+                    let evidence = best.parts.sorted { $0.key.rawValue < $1.key.rawValue }
+                        .map { "\($0.key.rawValue) \(Int(($0.value * 100).rounded()))" }.joined(separator: ", ")
+                    note(stepIndex, "Found on screen \(Self.describe(best, visual)) · \(Int((best.score * 100).rounded()))% match (\(evidence))")
                     return CGPoint(x: wf.minX + best.point.x, y: wf.minY + best.point.y)
                 }
             }
