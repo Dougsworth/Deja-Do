@@ -208,9 +208,16 @@ enum SelfTest {
             await replay(screenOnly, name: "Screen only replay after moving the window", expect: "15", vision: true, log: log)
             if let f = after { await dragWindow(f, by: CGVector(dx: -160, dy: -90)) }
 
+            // Every button changes size and place here. Getting 15 is great; stopping
+            // safely is fine; clicking the wrong button and carrying on is the failure.
             await setMode(basic: false)
-            await replay(screenOnly, name: "Screen only replay in Scientific layout", expect: "15", vision: true,
-                         log: log, counted: false)
+            await press(["all clear", "clear", "ac", "c"])
+            let (sciError, sciNotes) = await runTask(screenOnly, vision: true)
+            let right = sciError == nil && displayShows("15")
+            let safeStop = sciError != nil
+            log.check("Screen only in Scientific layout: right answer or a safe stop, never a wrong result",
+                      right || safeStop, right ? "display: 15" : (sciError ?? "finished with display \(displayText())"))
+            log.line("      notes: \(sciNotes)")
             await setMode(basic: true)
         }
 
