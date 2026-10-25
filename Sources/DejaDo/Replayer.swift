@@ -163,6 +163,12 @@ final class Replayer: @unchecked Sendable {
                 if risky {
                     throw ReplayError("Couldn't find step \(i + 1) on screen, and it sends, saves or deletes, so Deja Do won't click where it used to be.")
                 }
+                // The old spot only means something if the window is laid out as it was.
+                if target.visual != nil, settings.visionEnabled, let old = target.windowSize,
+                   let wf = ElementFinder.root(for: target)?.windowFrame,
+                   abs(wf.width - old.width) > old.width * 0.1 || abs(wf.height - old.height) > old.height * 0.1 {
+                    throw ReplayError("Couldn't find step \(i + 1) on screen, and the \(target.appName) window has changed size since it was recorded, so clicking where it used to be would be a guess.\(lastVisualMiss.map { " (\($0))" } ?? "")")
+                }
                 try await ensureFront()
                 try await clickPosition(target, button: button, count: count, modifiers: modifiers)
                 note(i, target.visual != nil && settings.visionEnabled

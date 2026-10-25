@@ -246,6 +246,8 @@ public struct VisualMatcher {
             if let tx = x[.text], tx < 0.5, (x[.image] ?? 0) < 0.9 { s *= 0.75 }
             // Position alone is never enough.
             if x[.text] == nil && x[.anchor] == nil && (x[.image] ?? 0) < 0.5 { s *= 0.6 }
+            // With no text to back it up, only a close picture match may act alone.
+            else if (x[.text] ?? 0) < 0.75 && (x[.anchor] ?? 0) < 0.5 && (x[.image] ?? 0) < 0.75 { s *= 0.8 }
             return VisualCandidate(point: point, score: s, parts: x, source: source)
         }
         scored.sort { $0.score > $1.score }
