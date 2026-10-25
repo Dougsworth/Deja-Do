@@ -34,7 +34,14 @@ enum AppsSelfTest {
             let framework = url.appendingPathComponent("Contents/Frameworks/Electron Framework.framework")
             return FileManager.default.fileExists(atPath: framework.path)
         }
-        guard let app = running.first, let id = app.bundleIdentifier else {
+        // Prefer one with a window open: an app sitting in the Dock with none has nothing to read.
+        func windowCount(_ a: NSRunningApplication) -> Int {
+            let e = AXUIElementCreateApplication(a.processIdentifier)
+            AXUIElementSetMessagingTimeout(e, 0.5)
+            return AX.elements(AX.raw(e, kAXWindowsAttribute)).count
+        }
+        let withWindows = running.filter { windowCount($0) > 0 }
+        guard let app = withWindows.first ?? running.first, let id = app.bundleIdentifier else {
             log.check("An Electron app describes its buttons once asked", true, "no Electron app running, skipped", counted: false)
             return
         }
