@@ -175,6 +175,12 @@ public struct VisualMatcher {
         // VM viewer, another display) doesn't wipe the detail out.
         let fineTemplate = texture >= 6 ? Self.detail(template) : template
         let fineWindow = texture >= 6 ? Self.detail(window) : window
+        // The few points right under the click. Lookalike buttons (a row of round
+        // operator keys, a toolbar of same-shaped icons) share almost everything in
+        // the wider picture and differ only here, so this part has to match too.
+        // Both lightly softened, so a slightly softer rendering still lines up.
+        let core = Self.core(of: template, clickInCrop: t.clickInCrop, scale: window.scale)
+        let softWindow = core == nil ? window : window.blurred(radius: 1)
 
         // 1. Propose spots.
         var proposals: [(CGPoint, VisualSignal)] = []
@@ -218,7 +224,12 @@ public struct VisualMatcher {
             if texture >= 6 {
                 let coarse = imageScore(template, window, at: point, clickInCrop: t.clickInCrop)
                 let fine = imageScore(fineTemplate, fineWindow, at: point, clickInCrop: t.clickInCrop)
-                x[.image] = Self.imageSignal(coarse: coarse, fine: fine)
+                var signal = Self.imageSignal(coarse: coarse, fine: fine)
+                if let core {
+                    let c = imageScore(core.image, softWindow, at: point, clickInCrop: core.clickInCore)
+                    signal = min(signal, min(1, max(0, (c - 0.6) / 0.32)))
+                }
+                x[.image] = signal
             }
             x[.spatial] = MatchEngine.spatialScore(recorded: t.click, candidate: point, shift: shift,
                                                    recordedWindow: t.windowSize, currentWindow: windowSize)
@@ -250,6 +261,19 @@ public struct VisualMatcher {
         if top.score >= acceptScore && margin >= requiredMargin { return .confident(top) }
         if top.score >= plausibleScore { return .ambiguous(Array(ranked.prefix(6))) }
         return .notFound(Array(ranked.prefix(6)))
+    }
+
+    static let coreSide = 22.0
+
+    /// The square of `coreSide` points centred on the click, when it has enough detail to compare.
+    static func core(of template: GrayImage, clickInCrop: CGPoint, scale: Double) -> (image: GrayImage, clickInCore: CGPoint)? {
+        let half = coreSide / 2
+        let originX = max(0, Double(clickInCrop.x) - half), originY = max(0, Double(clickInCrop.y) - half)
+        let side = Int((coreSide * scale).rounded())
+        let image = template.cropped(x: Int((originX * scale).rounded()), y: Int((originY * scale).rounded()),
+                                     width: side, height: side)
+        guard image.width >= 6, image.height >= 6, image.contrast >= 6 else { return nil }
+        return (image.blurred(radius: 1), CGPoint(x: Double(clickInCrop.x) - originX, y: Double(clickInCrop.y) - originY))
     }
 
     /// A band of detail: lightly softened first, so a rendering that is a

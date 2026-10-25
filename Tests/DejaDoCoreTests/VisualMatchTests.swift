@@ -14,8 +14,9 @@ struct Canvas {
         image = GrayImage(width: width, height: height, fill: background, scale: scale)
     }
 
-    /// An icon whose centre sits at (x, y) points.
-    mutating func icon(seed: UInt64, at x: Int, _ y: Int, size: Int = 24) {
+    /// An icon whose centre sits at (x, y) points. `cell` is the size of each
+    /// block of the pattern; real icons and text have strokes a few points wide.
+    mutating func icon(seed: UInt64, at x: Int, _ y: Int, size: Int = 24, cell: Int = 1) {
         var rng = seed &* 6364136223846793005 &+ 1442695040888963407
         let s = image.scale
         let side = Int(Double(size) * s)
@@ -28,7 +29,8 @@ struct Canvas {
         }
         for py in 0..<side {
             for px in 0..<side {
-                let cx = min(size - 1, Int(Double(px) / s)), cy = min(size - 1, Int(Double(py) / s))
+                let cx = min(size - 1, Int(Double(px) / s) / cell * cell)
+                let cy = min(size - 1, Int(Double(py) / s) / cell * cell)
                 let ix = left + px, iy = top + py
                 guard ix >= 0, iy >= 0, ix < image.width, iy < image.height else { continue }
                 image[ix, iy] = cells[cy * size + cx]
@@ -242,13 +244,13 @@ final class VisualMatcherTests: XCTestCase {
     func testSlightlySofterRenderingStillMatches() {
         // Scaling in a VM viewer or a different display softens edges a little.
         var before = Canvas(width: 480, height: 320)
-        before.icon(seed: 51, at: 140, 90)
-        before.icon(seed: 52, at: 300, 200)
+        before.icon(seed: 51, at: 140, 90, cell: 3)
+        before.icon(seed: 52, at: 300, 200, cell: 3)
         let target = VisualTarget.make(window: before.image, lines: [], click: CGPoint(x: 300, y: 200), windowSize: size)
 
         var after = Canvas(width: 480, height: 320)
-        after.icon(seed: 51, at: 140, 90)
-        after.icon(seed: 52, at: 320, 210)
+        after.icon(seed: 51, at: 140, 90, cell: 3)
+        after.icon(seed: 52, at: 320, 210, cell: 3)
         let img = after.image
         var soft = img
         for y in 1..<(img.height - 1) {
@@ -260,6 +262,27 @@ final class VisualMatcherTests: XCTestCase {
         }
         let r = VisualMatcher().match(target, window: soft, lines: [], windowSize: size)
         assertConfident(r, near: CGPoint(x: 320, y: 210))
+    }
+
+    func testLookalikeButtonsDifferingOnlyInTheMiddleAreNotConfused() {
+        // Two round keys with the same face, told apart only by the symbol in the middle.
+        func key(_ c: inout Canvas, at x: Int, _ y: Int, symbol: UInt64) {
+            c.icon(seed: 99, at: x, y, size: 40)       // shared face
+            c.icon(seed: symbol, at: x, y, size: 12)   // the symbol
+        }
+        var before = Canvas(width: 480, height: 320)
+        key(&before, at: 100, 100, symbol: 1)   // "+"
+        key(&before, at: 100, 160, symbol: 2)   // "−"
+        let target = VisualTarget.make(window: before.image, lines: [], click: CGPoint(x: 100, y: 100), windowSize: size)
+
+        // New layout: the keys moved and swapped order.
+        var after = Canvas(width: 480, height: 320)
+        key(&after, at: 300, 100, symbol: 2)
+        key(&after, at: 300, 200, symbol: 1)
+        let r = VisualMatcher().match(target, window: after.image, lines: [], windowSize: size)
+        if case .confident(let best) = r.decision {
+            XCTAssertLessThan(hypot(best.point.x - 300, best.point.y - 200), 4, "picked the lookalike at \(best.point)")
+        }
     }
 
     func testMakeKeepsTheClosestDistinctLabels() {
