@@ -20,6 +20,8 @@ final class Replayer {
         var askText: (_ prompt: String, _ secret: Bool) async -> String?
         /// A click step's locator was refreshed. `byAI` is true when the AI found it.
         var learned: (_ stepIndex: Int, _ locator: ElementLocator, _ byAI: Bool) -> Void
+        /// What a step actually did, shown under it after the run.
+        var note: (_ stepIndex: Int, _ text: String) -> Void
         /// Match weights for an app were tuned after an AI fix.
         var tuned: (_ bundleID: String, _ weights: MatchWeights) -> Void
     }
@@ -52,6 +54,7 @@ final class Replayer {
             case .click(let target, let button, let count, let modifiers):
                 if target.role == AX.positionRole {
                     try await clickPosition(target, button: button, count: count, modifiers: modifiers)
+                    callbacks.note(i, "Clicked by position: the app didn't say what was here when recorded")
                     break
                 }
                 let match = try await locate(target, stepIndex: i, settings: settings, callbacks: callbacks)
@@ -140,6 +143,8 @@ final class Replayer {
                         u.clickOffset = target.clickOffset
                         callbacks.learned(stepIndex, u, false)
                     }
+                    let snap = o.snapshot(for: best)
+                    callbacks.note(stepIndex, "Found \(Self.describe(snap)) · \(Int((best.score * 100).rounded()))% match")
                     return ElementFinder.Match(element: el, windowFrame: o.root.windowFrame)
                 }
             }
@@ -178,6 +183,7 @@ final class Replayer {
             u.clickOffset = target.clickOffset
             callbacks.learned(stepIndex, u, true)
         }
+        callbacks.note(stepIndex, "AI picked \(Self.describe(outcome.snapshot(for: chosen))): \(choice.reason ?? "")")
         return ElementFinder.Match(element: el, windowFrame: outcome.root.windowFrame)
     }
 
@@ -203,6 +209,13 @@ final class Replayer {
         let oy = min(max(target.clickOffset.y, 0.1), 0.9)
         let point = CGPoint(x: f.minX + f.width * ox, y: f.minY + f.height * oy)
         Input.click(at: point, button: button, count: count, modifiers: modifiers)
+    }
+
+    static func describe(_ s: ElementSnapshot) -> String {
+        let role = Step.friendlyRole(s.role, subrole: s.subrole)
+        if let l = s.label { return "\(role) “\(l.prefix(40))”" }
+        if let f = s.frame { return "\(role) at \(Int(f.midX)), \(Int(f.midY))" }
+        return role
     }
 
     /// Replays a click recorded only by position, scaled if the window was resized.

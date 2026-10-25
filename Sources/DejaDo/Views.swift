@@ -425,7 +425,7 @@ struct AutomationView: View {
             List {
                 ForEach($automation.steps) { $step in
                     let n = number(of: step)
-                    StepRow(step: $step, number: n, state: state(for: n - 1))
+                    StepRow(step: $step, number: n, state: state(for: n - 1), note: model.runNotes[step.id])
                         .listRowSeparator(.visible)
                         .listRowInsets(EdgeInsets(top: 0, leading: Metrics.gutter - 8, bottom: 0, trailing: Metrics.gutter - 8))
                         .contextMenu {
@@ -500,6 +500,8 @@ struct StepLine<Editor: View>: View {
     let app: String?
     var state: StepState = .idle
     var dimmed = false
+    /// What this step did on the last run.
+    var note: String? = nil
     @ViewBuilder var editor: () -> Editor
 
     var body: some View {
@@ -529,6 +531,12 @@ struct StepLine<Editor: View>: View {
                 Text(summary)
                     .font(.rounded(13, state == .current ? .semibold : .regular))
                     .foregroundStyle(dimmed || state == .done ? .secondary : .primary)
+                if let note {
+                    Text(note)
+                        .font(.rounded(11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
                 editor()
             }
 
@@ -559,9 +567,11 @@ struct StepRow: View {
     @Binding var step: Step
     let number: Int
     let state: StepState
+    var note: String? = nil
 
     var body: some View {
-        StepLine(number: number, symbol: step.symbol, summary: step.summary, app: step.appName, state: state) { editor }
+        StepLine(number: number, symbol: step.symbol, summary: step.summary, app: step.appName,
+                 state: state, note: note) { editor }
     }
 
     @ViewBuilder private var editor: some View {

@@ -15,6 +15,8 @@ final class AppModel: ObservableObject, @unchecked Sendable {
     @Published var runningID: UUID?
     @Published var runningStep = 0
     @Published var status: String?
+    /// What each step did on the most recent run, keyed by step ID. Not saved.
+    @Published var runNotes: [UUID: String] = [:]
 
     @Published var hasAccessibility = Permissions.accessibility
     @Published var hasInputMonitoring = Permissions.inputMonitoring
@@ -114,6 +116,8 @@ final class AppModel: ObservableObject, @unchecked Sendable {
         runningID = automation.id
         runningStep = 0
         runStarted = Date()
+        runNotes = [:]
+        let stepIDs = automation.steps.map(\.id)
         status = "Running \(automation.name)…"
         startEscapeMonitor()
 
@@ -129,6 +133,12 @@ final class AppModel: ObservableObject, @unchecked Sendable {
             },
             learned: { [weak self] index, locator, byAI in
                 DispatchQueue.main.async { self?.applyRepair(id: id, stepIndex: index, locator: locator, byAI: byAI) }
+            },
+            note: { [weak self] index, text in
+                DispatchQueue.main.async {
+                    guard index < stepIDs.count else { return }
+                    self?.runNotes[stepIDs[index]] = text
+                }
             },
             tuned: { [weak self] bundleID, w in
                 DispatchQueue.main.async {
