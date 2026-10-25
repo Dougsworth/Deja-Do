@@ -41,6 +41,12 @@ enum AppsSelfTest {
         let el = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(el, 1.0)
         AX.wake(app: el, bundleID: id)
+        let windows = AX.elements(AX.raw(el, kAXWindowsAttribute))
+        guard !windows.isEmpty else {
+            log.check("An Electron app describes its buttons once asked", true,
+                      "\(app.localizedName ?? id) is running without a window, skipped", counted: false)
+            return
+        }
         var labelled = 0, total = 0
         let deadline = Date().addingTimeInterval(6)
         repeat {
@@ -52,7 +58,7 @@ enum AppsSelfTest {
             if labelled >= 5 { break }
         } while Date() < deadline
         log.check("An Electron app describes its buttons once asked", labelled >= 5,
-                  "\(app.localizedName ?? id): \(total) controls, \(labelled) with names")
+                  "\(app.localizedName ?? id): \(windows.count) windows, \(total) controls, \(labelled) with names")
     }
 
     // MARK: TextEdit
@@ -172,9 +178,16 @@ enum AppsSelfTest {
         documentText().components(separatedBy: s).count - 1
     }
 
+    /// The Save panel: a sheet on the document, or on some Macs a separate dialog window.
     static func sheetShowing() -> Bool {
-        guard let w = window() else { return false }
-        return AX.elements(AX.raw(w, kAXChildrenAttribute)).contains { AX.role($0) == "AXSheet" }
+        guard let el = appElement() else { return false }
+        for w in AX.elements(AX.raw(el, kAXWindowsAttribute)) {
+            if AX.elements(AX.raw(w, kAXChildrenAttribute)).contains(where: { AX.role($0) == "AXSheet" }) { return true }
+            if AX.string(w, kAXSubroleAttribute) == "AXDialog" { return true }
+            let texts = AX.collect(from: w, origin: nil, limit: 300) { $0 == "AXStaticText" || $0 == "AXButton" }
+            if texts.contains(where: { ($0.node.label ?? "").hasPrefix("Save As") }) { return true }
+        }
+        return false
     }
 
     static func openTextEdit() async -> Bool {

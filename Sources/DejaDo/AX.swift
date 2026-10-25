@@ -121,11 +121,27 @@ enum AX {
     }
 
     /// Chrome and Electron apps only build their accessibility tree when asked.
+    /// Chromium listens for either attribute depending on its version, so
+    /// anything built on it gets both. Other apps get only the harmless one:
+    /// AXEnhancedUserInterface makes some native apps animate window moves oddly.
     static func wake(app el: AXUIElement, bundleID: String) {
         AXUIElementSetAttributeValue(el, "AXManualAccessibility" as CFString, kCFBooleanTrue)
-        if chromiumBrowsers.contains(bundleID) {
+        if chromiumBrowsers.contains(bundleID) || isElectron(bundleID) {
             AXUIElementSetAttributeValue(el, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
         }
+    }
+
+    private static var electronCache: [String: Bool] = [:]
+    private static let electronLock = NSLock()
+
+    /// Whether the app is built on Electron (it ships the framework inside its bundle).
+    static func isElectron(_ bundleID: String) -> Bool {
+        electronLock.lock(); defer { electronLock.unlock() }
+        if let known = electronCache[bundleID] { return known }
+        let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+        let has = url.map { FileManager.default.fileExists(atPath: $0.appendingPathComponent("Contents/Frameworks/Electron Framework.framework").path) } ?? false
+        electronCache[bundleID] = has
+        return has
     }
 
     static func wake(pid: pid_t, bundleID: String) {
