@@ -4,7 +4,8 @@
 #        ./build.sh run      build, then open the app
 #        ./build.sh test     run the engine's unit tests
 #        ./build.sh release  sign with Developer ID, notarize, and zip it to send to people
-#        ./build.sh selftest build, install, then drive Calculator end to end (results in self-test.txt)
+#        ./build.sh selftest build, install, then drive Calculator and a web form in Safari end to end
+#                            (results in self-test.txt; SUITE=calculator or SUITE=web runs one of them)
 #        ./build.sh watch    wait for a .selftest-request file, then run the self test; repeats until Ctrl+C
 #
 # Release needs the paid Apple Developer Program, a "Developer ID Application"
@@ -21,6 +22,8 @@ if [ "${1:-}" = "watch" ]; then
   echo "Waiting for test requests. Leave this window open, and the mouse alone while a test runs. Ctrl+C stops."
   while true; do
     if [ -f .selftest-request ]; then
+      SUITE="$(cat .selftest-request 2>/dev/null | tr -d '[:space:]')"
+      export SUITE
       rm -f .selftest-request .selftest-done
       echo "$(date '+%H:%M:%S') building and running the self test"
       if ./build.sh selftest > build.log 2>&1; then RESULT=passed; else RESULT=failed; fi
@@ -99,8 +102,9 @@ if [ "${1:-}" = "run" ] || [ "${1:-}" = "selftest" ]; then
   if [ "${1:-}" = "selftest" ]; then
     OUT="$PWD/self-test.txt"
     rm -f "$OUT"
-    echo "Running the self test. Don't touch the mouse or keyboard for about a minute."
-    open -W -n "$DEST/Deja Do.app" --args --self-test "$OUT" || true
+    # SUITE=calculator or SUITE=web runs one suite; the default runs both.
+    echo "Running the self test. Don't touch the mouse or keyboard for a few minutes."
+    open -W -n "$DEST/Deja Do.app" --args --self-test "$OUT" ${SUITE:+--suite "$SUITE"} || true
     cat "$OUT" 2>/dev/null || echo "No results were written. Check that Deja Do has Accessibility and Input Monitoring."
     grep -q "ALL PASSED" "$OUT" 2>/dev/null
     exit $?

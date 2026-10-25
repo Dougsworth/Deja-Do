@@ -24,6 +24,13 @@ enum SelfTest {
 
     static let calculatorID = "com.apple.calculator"
 
+    /// `--suite calculator` or `--suite web` runs one; the default runs both.
+    static var suites: Set<String> {
+        let args = CommandLine.arguments
+        if let i = args.firstIndex(of: "--suite"), i + 1 < args.count { return [args[i + 1].lowercased()] }
+        return ["calculator", "web"]
+    }
+
     static func start() {
         Task.detached(priority: .userInitiated) {
             let log = Log(path: outputPath)
@@ -71,6 +78,13 @@ enum SelfTest {
             NSApp.hide(nil)
         }
 
+        var passed = true
+        if suites.contains("calculator") { passed = await calculator(log, vision: vision) && passed }
+        if suites.contains("web") { passed = await WebSelfTest.run(log, vision: vision) && passed }
+        return passed && log.failures == 0
+    }
+
+    static func calculator(_ log: Log, vision: Bool) async -> Bool {
         guard await openCalculator() else {
             log.check("Calculator opens", false)
             return false

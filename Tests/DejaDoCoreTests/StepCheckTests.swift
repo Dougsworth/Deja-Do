@@ -184,10 +184,14 @@ final class StepCheckLoopTests: XCTestCase {
         XCTAssertEqual(loop.next(failed), .recheck(after: 0.4))
         XCTAssertEqual(loop.next(failed), .recheck(after: 0.8))
         XCTAssertEqual(loop.next(failed), .recheck(after: 1.2))
+        XCTAssertEqual(loop.next(failed), .recheck(after: 1.6))
+        XCTAssertEqual(loop.next(failed), .recheck(after: 2.0))
         XCTAssertEqual(loop.next(failed), .redo)
         XCTAssertEqual(loop.next(failed), .recheck(after: 0.4))
         XCTAssertEqual(loop.next(failed), .recheck(after: 0.8))
         XCTAssertEqual(loop.next(failed), .recheck(after: 1.2))
+        XCTAssertEqual(loop.next(failed), .recheck(after: 1.6))
+        XCTAssertEqual(loop.next(failed), .recheck(after: 2.0))
         XCTAssertEqual(loop.next(failed), .stop("why, even after trying again"))
     }
 

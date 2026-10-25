@@ -412,7 +412,10 @@ public struct StepCheckLoop {
     public let canRedo: Bool
     /// Risky steps (send, save, delete) are never repeated, and a half match stops instead of carrying on.
     public let risky: Bool
-    public var maxRechecks = 3
+    /// Six seconds of patience in all, because a form that takes a few seconds
+    /// to answer is ordinary, and repeating a click into a slow page is how
+    /// things get sent twice.
+    public var maxRechecks = 5
     public var maxRedos = 1
     public private(set) var rechecks = 0
     public private(set) var redos = 0
@@ -450,7 +453,7 @@ public struct StepCheckLoop {
 
     private mutating func recheck() -> Action {
         rechecks += 1
-        let delays = [0.4, 0.8, 1.2]
+        let delays = [0.4, 0.8, 1.2, 1.6, 2.0]
         return .recheck(after: delays[min(rechecks, delays.count) - 1])
     }
 }
