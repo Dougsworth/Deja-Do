@@ -186,6 +186,13 @@ public struct RunRecord: Codable, Equatable, Identifiable {
         public var summary: String
         public var note: String?
         public var ran: Bool
+
+        public init(index: Int, summary: String, note: String?, ran: Bool) {
+            self.index = index
+            self.summary = summary
+            self.note = note
+            self.ran = ran
+        }
     }
 
     public init(started: Date, duration: Double, outcome: String, succeeded: Bool, row: Int? = nil, rows: Int? = nil,

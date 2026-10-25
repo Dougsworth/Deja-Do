@@ -20,6 +20,8 @@ enum ElementFinder {
         let elements: [AXUIElement]
         let snapshots: [ElementSnapshot]
         let report: MatchReport
+        /// The window was too big or slow to scan completely.
+        var truncated = false
 
         func element(for c: RankedCandidate) -> AXUIElement { elements[c.index] }
         func snapshot(for c: RankedCandidate) -> ElementSnapshot { snapshots[c.index] }
@@ -63,11 +65,14 @@ enum ElementFinder {
         }
 
         let wanted = l.role
-        let found = AX.collect(from: root.element, origin: origin) { role in
+        let scan = AX.collectBounded(from: root.element, origin: origin) { role in
             role == wanted || AX.matchRoles.contains(role) || MatchEngine.roleCompatibility(wanted, role) > 0
         }
+        let found = scan.found
         let snapshots = found.map(\.snapshot)
-        let report = engine.match(l, among: snapshots, windowSize: root.windowFrame?.size)
-        return Outcome(root: root, elements: found.map(\.element), snapshots: snapshots, report: report)
+        var report = engine.match(l, among: snapshots, windowSize: root.windowFrame?.size)
+        if scan.truncated { report = report.incomplete() }
+        return Outcome(root: root, elements: found.map(\.element), snapshots: snapshots, report: report,
+                       truncated: scan.truncated)
     }
 }

@@ -14,7 +14,8 @@ struct AIRepair {
     }
 
     /// - Parameter shortlist: candidates with the engine's score, best first.
-    func choose(target l: ElementLocator, shortlist: [(snapshot: ElementSnapshot, score: Double)]) async throws -> Choice {
+    func choose(target l: ElementLocator, shortlist: [(snapshot: ElementSnapshot, score: Double)],
+                goal: String? = nil, stepNumber: Int? = nil) async throws -> Choice {
         var lines: [String] = []
         for (i, item) in shortlist.enumerated() {
             let n = item.snapshot
@@ -42,11 +43,17 @@ struct AIRepair {
             wanted.append("near \"\(a.label.prefix(40))\" (\(Self.direction(a.offset)))")
         }
 
+        var purpose = ""
+        if let goal = goal?.trimmingCharacters(in: .whitespacesAndNewlines), !goal.isEmpty {
+            purpose = "The task this click belongs to: \(goal.prefix(300))\n"
+        }
+        if let stepNumber { purpose += "This is step \(stepNumber) of the task.\n" }
+
         let prompt = """
         A user recorded clicking an element in the Mac app \(l.appName). The app's layout has since \
         changed, so the recorded element can't be found with confidence. Pick the element in the current \
         window that does the same job.
-
+        \(purpose)
         Recorded element:
         \(wanted.joined(separator: " | "))
 
@@ -94,6 +101,11 @@ struct AIRepair {
 
 struct ReplayError: LocalizedError {
     let message: String
-    init(_ message: String) { self.message = message }
+    /// The person stopped it, as opposed to something going wrong.
+    let cancelled: Bool
+    init(_ message: String, cancelled: Bool = false) {
+        self.message = message
+        self.cancelled = cancelled
+    }
     var errorDescription: String? { message }
 }

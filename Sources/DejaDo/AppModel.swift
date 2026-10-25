@@ -75,6 +75,32 @@ final class AppModel: ObservableObject, @unchecked Sendable {
     @Published var useVision: Bool { didSet { UserDefaults.standard.set(useVision, forKey: "useVision") } }
     /// Confirm each step changed the screen the way it did when recorded.
     @Published var checkSteps: Bool { didSet { UserDefaults.standard.set(checkSteps, forKey: "checkSteps") } }
+    /// Ask before every step that sends, saves or deletes.
+    @Published var askBeforeRisky: Bool { didSet { UserDefaults.standard.set(askBeforeRisky, forKey: "askBeforeRisky") } }
+    /// Let other apps and agents run tasks through dejado:// links without asking each time.
+    @Published var allowOtherApps: Bool { didSet { UserDefaults.standard.set(allowOtherApps, forKey: "allowOtherApps") } }
+
+    /// A spreadsheet run that stopped part way, ready to carry on.
+    struct Resume {
+        let automationID: UUID
+        let rows: [[String: String]]
+        /// Row to start from, counted from 0.
+        let from: Int
+        /// Whether the row it stopped on may already have sent or saved something.
+        let mayRepeat: Bool
+    }
+    @Published var resume: Resume?
+    /// Where the last run stopped, so a popup in the way can be taught.
+    @Published var lastStop: (automationID: UUID, step: Int)?
+    @Published var isTeachingPopup = false
+    @Published var isChecking = false
+    /// Suggestions the person said "not now" to, per step.
+    @Published var dismissedSuggestions: Set<UUID> = []
+    /// The step as it was before an AI repair, so the repair can be undone. Kept until quit.
+    @Published var beforeRepair: [UUID: ElementLocator] = [:]
+    /// Run history sheet.
+    @Published var historyFor: UUID?
+    let history = RunHistory()
 
     private let persistence = Persistence()
     private let weightStore = WeightStore()
@@ -118,7 +144,11 @@ final class AppModel: ObservableObject, @unchecked Sendable {
         providerKey = provider.keychainAccount.flatMap { Keychain.get($0) } ?? ""
         useVision = defaults.object(forKey: "useVision") as? Bool ?? true
         checkSteps = defaults.object(forKey: "checkSteps") as? Bool ?? true
-        automations = persistence.loadAll()
+        askBeforeRisky = defaults.object(forKey: "askBeforeRisky") as? Bool ?? false
+        allowOtherApps = defaults.object(forKey: "allowOtherApps") as? Bool ?? false
+        let scan = persistence.scan()
+        automations = scan.automations
+        if !scan.problems.isEmpty { status = scan.problems.joined(separator: " ") }
         weights = weightStore.load()
         selection = automations.first?.id
 
@@ -268,7 +298,7 @@ final class AppModel: ObservableObject, @unchecked Sendable {
         start(automation, rows: rows)
     }
 
-    private func start(_ automation: Automation, rows: [[String: String]]) {
+    private func start(_ automation: Automation, rows: [[String: String]], from startRow: Int = 0) {
         guard runningID == nil, !isRecording else { return }
         refreshPermissions()
         guard hasAccessibility else {
@@ -287,8 +317,11 @@ final class AppModel: ObservableObject, @unchecked Sendable {
         startEscapeMonitor()
 
         refreshPermissions()
+        resume = nil
+        lastStop = nil
         let settings = Replayer.Settings(ai: aiConfig, aiEnabled: aiEnabled, weights: weights,
-                                         visionEnabled: visionActive, checkSteps: checkSteps)
+                                         visionEnabled: visionActive, checkSteps: checkSteps,
+                                         askBeforeRisky: askBeforeRisky)
         let id = automation.id
         let callbacks = Replayer.Callbacks(
             progress: { [weak self] i in DispatchQueue.main.async { self?.runningStep = i } },
@@ -312,22 +345,61 @@ final class AppModel: ObservableObject, @unchecked Sendable {
                     self.weights[bundleID] = w
                     self.weightStore.save(self.weights)
                 }
+            },
+            confirm: { question, detail in
+                await withCheckedContinuation { cont in
+                    DispatchQueue.main.async { cont.resume(returning: Prompt.confirm(question, detail: detail)) }
+                }
             }
         )
         let replayer = self.replayer
         let total = rows.count
+        let history = self.history
+        let firstRow = startRow
         Task.detached {
             var failure: String?
-            for (r, values) in rows.enumerated() {
+            for r in firstRow..<rows.count {
+                let values = rows[r]
                 DispatchQueue.main.async { [weak self] in
                     self?.runningRow = r
                     if total > 1 { self?.status = "Row \(r + 1) of \(total)…" }
                 }
+                let started = Date()
+                var stop: ReplayStop?
                 do {
                     try await replayer.run(automation, settings: settings, callbacks: callbacks, values: values)
+                } catch let s as ReplayStop {
+                    stop = s
                 } catch {
-                    let message = error.localizedDescription
-                    failure = total > 1 ? "Stopped at row \(r + 1) of \(total): \(message)" : message
+                    stop = ReplayStop(message: error.localizedDescription, step: 0, outcome: .stoppedBeforeChanges(atStep: 0))
+                }
+                // Keep a record of the run: step summaries and notes, never typed text.
+                let notes = replayer.notes
+                let record = RunRecord(
+                    started: started, duration: Date().timeIntervalSince(started),
+                    outcome: stop.map { "\($0.message) \($0.outcome.advice)" } ?? "Done.",
+                    succeeded: stop == nil, row: total > 1 ? r + 1 : nil, rows: total > 1 ? total : nil,
+                    steps: automation.steps.enumerated().map { i, step in
+                        RunRecord.StepRun(index: i, summary: step.safeSummary,
+                                          note: notes[i]?.joined(separator: " · "),
+                                          ran: stop.map { i <= $0.step } ?? true)
+                    })
+                history.add(record, to: id)
+
+                if let stop {
+                    let where_ = total > 1 ? "Stopped at row \(r + 1) of \(total): " : ""
+                    let cancelled: Bool
+                    if case .cancelled = stop.outcome { cancelled = true } else { cancelled = false }
+                    failure = cancelled ? "Stopped. \(stop.outcome.advice)" : "\(where_)\(stop.message) \(stop.outcome.advice)"
+                    let mayRepeat = stop.outcome.mayRepeatChanges
+                    DispatchQueue.main.async { [weak self] in
+                        self?.lastStop = (id, stop.step)
+                        if total > 1 {
+                            // Carry on from the row it stopped on, or the next one if that row may have gone through.
+                            let next = mayRepeat ? r + 1 : r
+                            if next < total { self?.resume = Resume(automationID: id, rows: rows, from: next, mayRepeat: mayRepeat) }
+                        }
+                    }
                     break
                 }
             }
@@ -336,6 +408,13 @@ final class AppModel: ObservableObject, @unchecked Sendable {
                 self?.finishRun(id: id, failure: done, rows: total)
             }
         }
+    }
+
+    /// Carries on a spreadsheet run that stopped.
+    func continueRows() {
+        guard let r = resume, let a = automations.first(where: { $0.id == r.automationID }) else { return }
+        resume = nil
+        start(a, rows: r.rows, from: r.from)
     }
 
     func stopRun() { replayer.cancel() }
@@ -360,9 +439,229 @@ final class AppModel: ObservableObject, @unchecked Sendable {
 
     private func applyRepair(id: UUID, stepIndex: Int, locator: ElementLocator, byAI: Bool) {
         update(id) { a in
-            guard stepIndex < a.steps.count, case .click(_, let b, let c, let m) = a.steps[stepIndex].kind else { return }
+            guard stepIndex < a.steps.count, case .click(let old, let b, let c, let m) = a.steps[stepIndex].kind else { return }
+            if byAI { beforeRepair[a.steps[stepIndex].id] = old }
             a.steps[stepIndex].kind = .click(target: locator, button: b, count: c, modifiers: m)
             if byAI { a.repairs += 1 }
+        }
+    }
+
+    /// Puts a step back the way it was before AI changed it.
+    func undoRepair(automation id: UUID, step stepID: UUID) {
+        guard let old = beforeRepair[stepID] else { return }
+        update(id) { a in
+            guard let i = a.steps.firstIndex(where: { $0.id == stepID }),
+                  case .click(_, let b, let c, let m) = a.steps[i].kind else { return }
+            a.steps[i].kind = .click(target: old, button: b, count: c, modifiers: m)
+        }
+        beforeRepair[stepID] = nil
+        status = "Put the step back the way it was recorded."
+    }
+
+    // MARK: Check
+
+    /// Looks for every click step on the screen as it is now, without clicking
+    /// or typing anything. Apps have to be open for their steps to be checked.
+    /// (MacTape's Dry Run, adapted.)
+    func check(_ automation: Automation) {
+        guard runningID == nil, !isRecording, !isChecking else { return }
+        guard Permissions.accessibility else { Permissions.requestAccessibility(); return }
+        isChecking = true
+        runNotes = [:]
+        status = "Checking \(automation.name)…"
+        let vision = visionActive
+        let engineWeights = weights
+        Task.detached { [weak self] in
+            var found = 0, total = 0
+            var notes: [UUID: String] = [:]
+            for step in automation.steps where step.isEnabled {
+                guard case .click(let t, _, _, _) = step.kind else { continue }
+                total += 1
+                guard ElementFinder.runningApp(t.bundleID) != nil else {
+                    notes[step.id] = "Check: \(t.appName) isn't open, so this wasn't checked"
+                    continue
+                }
+                let engine = MatchEngine(weights: engineWeights[t.bundleID] ?? MatchWeights())
+                if t.prefersVisual || t.role == AX.positionRole {
+                    if vision, let visual = t.visual, let root = ElementFinder.root(for: t), let wf = root.windowFrame,
+                       let read = await ScreenVision.read(windowFrame: wf, ocr: true),
+                       case .confident(let best) = VisualMatcher().match(visual, window: read.image, lines: read.lines, windowSize: wf.size).decision {
+                        found += 1
+                        notes[step.id] = "Check: found on screen · \(Int((best.score * 100).rounded()))%"
+                    } else {
+                        notes[step.id] = "Check: not visible right now (it may appear after earlier steps run)"
+                    }
+                    continue
+                }
+                guard let o = ElementFinder.find(t, engine: engine) else {
+                    notes[step.id] = "Check: couldn't read the \(t.appName) window"
+                    continue
+                }
+                switch o.report.decision {
+                case .confident(let best):
+                    found += 1
+                    notes[step.id] = "Check: found \(Replayer.describe(o.snapshot(for: best))) · \(Int((best.score * 100).rounded()))%"
+                case .ambiguous(let list):
+                    let names = list.prefix(2).map { Replayer.describe(o.snapshot(for: $0)) }.joined(separator: " or ")
+                    notes[step.id] = "Check: not sure, could be \(names)"
+                case .notFound:
+                    notes[step.id] = "Check: not on screen right now (it may appear after earlier steps run)"
+                }
+            }
+            let summary = total == 0 ? "Nothing to check: this task has no clicks."
+                : "Check: found \(found) of \(total) clicks on screen now. Nothing was clicked or typed."
+            let finalNotes = notes
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.runNotes = finalNotes
+                self.status = summary
+                self.isChecking = false
+            }
+        }
+    }
+
+    // MARK: Popups
+
+    /// Learns how to close a dialog that got in the way: remembers its text,
+    /// then watches for the one click or key press that closes it.
+    func teachPopup() {
+        guard let stop = lastStop, !isRecording, runningID == nil,
+              let a = automations.first(where: { $0.id == stop.automationID }) else { return }
+        guard Permissions.inputMonitoring else { Permissions.requestInputMonitoring(); return }
+        isTeachingPopup = true
+        status = "Close the thing in the way, the way you normally would. Deja Do is watching for one click or key press."
+        let normal: ScreenState? = nil
+        Task.detached { [weak self] in
+            let now = await ScreenStateReader.read(pid: nil, ocr: false, pixels: false)
+            let signature = PopupRule.signature(now: now, normal: normal)
+            await MainActor.run {
+                guard let self else { return }
+                guard !signature.isEmpty else {
+                    self.isTeachingPopup = false
+                    self.status = "Couldn't see anything to recognise it by. Make sure the popup is showing, then try again."
+                    return
+                }
+                let watcher = Recorder()
+                watcher.checkSteps = false
+                watcher.onChange = { [weak self, weak watcher] in
+                    guard let self, let watcher,
+                          let step = watcher.steps.first(where: {
+                              if case .click = $0.kind { return true }
+                              if case .key = $0.kind { return true }
+                              return false
+                          }) else { return }
+                    watcher.stop()
+                    self.saveTeachWatcher = nil
+                    let dismiss: PopupDismiss
+                    switch step.kind {
+                    case .click(let t, _, _, _): dismiss = .click(target: t)
+                    case .key(let c, let m, let l): dismiss = .key(code: c, modifiers: m, label: l)
+                    default: return
+                    }
+                    let rule = PopupRule(name: signature[0], bundleID: now.bundleID, detect: signature, dismiss: dismiss)
+                    self.update(a.id) { $0.popups = ($0.popups ?? []) + [rule] }
+                    self.isTeachingPopup = false
+                    self.status = "Got it. When “\(rule.name)” shows up, Deja Do will \(dismiss.summary) and carry on."
+                }
+                self.saveTeachWatcher = watcher
+                if !watcher.start() {
+                    self.isTeachingPopup = false
+                    self.status = "macOS blocked watching for the click. Check Input Monitoring in System Settings."
+                }
+            }
+        }
+    }
+    private var saveTeachWatcher: Recorder?
+
+    func removePopup(_ rule: PopupRule, from id: UUID) {
+        update(id) { a in a.popups?.removeAll { $0.id == rule.id } }
+    }
+
+    // MARK: Suggestions
+
+    func applyVariable(_ s: VariableSuggestion, in id: UUID) {
+        update(id) { a in VariableSuggester.apply(s, to: &a) }
+        var values = lastValues[id] ?? [:]
+        values[s.name] = s.text
+        lastValues[id] = values
+    }
+
+    func dismissSuggestion(_ stepID: UUID) { dismissedSuggestions.insert(stepID) }
+
+    func removeStep(_ stepID: UUID, from id: UUID) {
+        update(id) { a in a.steps.removeAll { $0.id == stepID } }
+    }
+
+    // MARK: Agent skills
+
+    /// Writes the task as a SKILL.md for Claude Code and Codex, in each one's
+    /// skills folder that exists on this Mac, so an agent can run it through Deja Do.
+    func installSkill(_ id: UUID) {
+        guard let a = automations.first(where: { $0.id == id }) else { return }
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let slug = SkillExport.slug(a.name)
+        let md = SkillExport.markdown(a)
+        var written: [String] = []
+        for (app, folder) in [("Claude Code", ".claude"), ("Codex", ".codex")] {
+            let base = home.appendingPathComponent(folder, isDirectory: true)
+            let exists = FileManager.default.fileExists(atPath: base.path)
+            guard exists || folder == ".claude" else { continue }
+            let dir = base.appendingPathComponent("skills/\(slug)", isDirectory: true)
+            do {
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                try md.write(to: dir.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+                written.append(app)
+            } catch {
+                status = "Couldn't write the skill for \(app): \(error.localizedDescription)"
+                return
+            }
+        }
+        status = "Added “\(a.name)” as a skill for \(written.joined(separator: " and ")). Agents run it through Deja Do\(allowOtherApps ? "" : ", and you'll be asked each time")."
+    }
+
+    /// Saves the SKILL.md wherever the person picks.
+    func exportSkill(_ id: UUID) {
+        guard let a = automations.first(where: { $0.id == id }) else { return }
+        let panel = NSSavePanel()
+        panel.title = "Save “\(a.name)” as an agent skill"
+        panel.nameFieldStringValue = "SKILL.md"
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try SkillExport.markdown(a).write(to: url, atomically: true, encoding: .utf8)
+            status = "Saved \(url.lastPathComponent)."
+        } catch {
+            status = "Couldn't save: \(error.localizedDescription)"
+        }
+    }
+
+    /// Runs a task asked for by a dejado://run?task=…&name=value link.
+    /// Asks first unless other apps are allowed to run tasks.
+    func handle(url: URL) {
+        guard url.scheme == "dejado", url.host == "run",
+              let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
+              let key = items.first(where: { $0.name == "task" })?.value else { return }
+        guard let a = automations.first(where: { $0.id.uuidString.lowercased() == key.lowercased() })
+                ?? automations.first(where: { $0.name.lowercased() == key.lowercased() }) else {
+            status = "Another app asked to run “\(key)”, but there's no task by that name."
+            return
+        }
+        var values: [String: String] = [:]
+        for item in items where item.name != "task" { values[item.name] = item.value ?? "" }
+        if !allowOtherApps {
+            NSApp.activate(ignoringOtherApps: true)
+            guard Prompt.confirm("Run “\(a.name)”?", detail: "Another app or an AI agent asked Deja Do to run this task. Only say yes if you expected it.") else {
+                status = "Didn't run “\(a.name)”."
+                return
+            }
+        }
+        let missing = Variables.missing(a.variableNames, in: Array(values.keys))
+        if missing.isEmpty {
+            start(a, rows: [values])
+        } else {
+            lastValues[a.id] = (lastValues[a.id] ?? [:]).merging(values) { $1 }
+            pendingRun = PendingRun(automationID: a.id, names: a.variableNames)
+            NSApp.activate(ignoringOtherApps: true)
         }
     }
 
@@ -462,6 +761,7 @@ final class AppModel: ObservableObject, @unchecked Sendable {
     }
 
     func delete(_ id: UUID) {
+        history.delete(id)
         automations.removeAll { $0.id == id }
         persistence.delete(id)
         if selection == id { selection = automations.first?.id }

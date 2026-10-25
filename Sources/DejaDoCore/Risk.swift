@@ -13,6 +13,11 @@ public struct RiskGuess: Equatable {
     public let risk: StepRisk
     /// Why, in a few words, for the step list.
     public let reason: String?
+
+    public init(risk: StepRisk, reason: String?) {
+        self.risk = risk
+        self.reason = reason
+    }
 }
 
 /// Guesses which steps are risky from their labels and keys.

@@ -258,13 +258,30 @@ enum AX {
     /// pages can't hang a replay.
     static func collect(from root: AXUIElement, origin: CGPoint?, limit: Int = 4000,
                         include: (String) -> Bool) -> [Found] {
+        collectBounded(from: root, origin: origin, limit: limit, include: include).found
+    }
+
+    /// Like `collect`, but also says whether the walk stopped early because it
+    /// hit the node cap or the time limit, so a match from a partial scan isn't
+    /// trusted as if everything had been looked at. Elements already visited are
+    /// skipped, so a tree that loops back on itself can't spin forever.
+    /// (Bounds and the visited check follow MacTape's SelectorResolver, MIT.)
+    static func collectBounded(from root: AXUIElement, origin: CGPoint?, limit: Int = 4000,
+                               seconds: Double = 4, include: (String) -> Bool) -> (found: [Found], truncated: Bool) {
         struct Item { let el: AXUIElement; let path: [PathStep]; let context: [String]; let siblings: SiblingCounter? }
         var queue = [Item(el: root, path: [], context: [], siblings: nil)]
         var head = 0
         var out: [Found] = []
-        while head < queue.count && head < limit {
+        var visited: [Int: [AXUIElement]] = [:]
+        let deadline = Date().addingTimeInterval(seconds)
+        var truncated = false
+        while head < queue.count {
+            if head >= limit || (head % 64 == 0 && Date() > deadline) { truncated = true; break }
             let item = queue[head]
             head += 1
+            let hash = Int(CFHash(item.el))
+            if visited[hash]?.contains(where: { CFEqual($0, item.el) }) == true { continue }
+            visited[hash, default: []].append(item.el)
             let a = fetch(item.el, nodeAttrs)
             let r = string(a[kAXRoleAttribute]) ?? "AXUnknown"
             let path = item.siblings.map { item.path + [PathStep(role: r, index: $0.next(r))] } ?? item.path
@@ -278,11 +295,69 @@ enum AX {
                 out.append(Found(element: item.el, node: n, snapshot: snapshot(n, origin: origin, path: path, context: item.context)))
             }
             let counter = SiblingCounter()
-            for child in elements(a[kAXChildrenAttribute]) {
+            // A single node with thousands of children (a huge table) can't starve the rest.
+            for child in elements(a[kAXChildrenAttribute]).prefix(1500) {
                 queue.append(Item(el: child, path: path, context: context, siblings: counter))
             }
         }
-        return out
+        return (out, truncated)
+    }
+
+    // MARK: Safety checks
+
+    /// True when the element under a point is the target itself, part of it, or a
+    /// container it sits in, in the same app. Anything else means something
+    /// (a banner, a popover, another window) is covering the target.
+    static func pointReaches(_ point: CGPoint, target: AXUIElement) -> Bool {
+        guard let hit = element(at: point) else { return true }   // can't tell: don't block
+        guard pid(hit) == pid(target) else { return false }
+        if CFEqual(hit, target) { return true }
+        // Part of the target: walk up from the hit.
+        var probe: AXUIElement? = element(hit, kAXParentAttribute)
+        for _ in 0..<12 {
+            guard let p = probe else { break }
+            if CFEqual(p, target) { return true }
+            probe = element(p, kAXParentAttribute)
+        }
+        // A container of the target: walk up from the target. Containers that
+        // float above other content (sheets, popovers, dialogs) don't count.
+        probe = element(target, kAXParentAttribute)
+        for _ in 0..<12 {
+            guard let p = probe else { break }
+            if CFEqual(p, hit) {
+                let r = role(hit)
+                return !["AXSheet", "AXPopover", "AXDialog"].contains(r)
+            }
+            probe = element(p, kAXParentAttribute)
+        }
+        return false
+    }
+
+    /// The text field with keyboard focus right now, its value, whether it's a
+    /// password field, and the name a person would give it.
+    struct FocusedField {
+        let element: AXUIElement
+        let value: String?
+        let secure: Bool
+        let label: String?
+    }
+
+    static func focusedField() -> FocusedField? {
+        let system = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(system, 0.5)
+        guard let el = element(system, kAXFocusedUIElementAttribute) else { return nil }
+        let a = fetch(el, [kAXRoleAttribute, kAXSubroleAttribute, kAXValueAttribute, kAXTitleAttribute,
+                           kAXDescriptionAttribute, "AXPlaceholderValue"])
+        let r = string(a[kAXRoleAttribute]) ?? ""
+        let secure = string(a[kAXSubroleAttribute]) == "AXSecureTextField"
+        var value: String?
+        if let v = a[kAXValueAttribute], CFGetTypeID(v) == CFStringGetTypeID() { value = (v as! String) }
+        if value == nil && !editableRoles.contains(r) && r != "AXWebArea" { return FocusedField(element: el, value: nil, secure: secure, label: nil) }
+        var label = string(a[kAXTitleAttribute]) ?? string(a["AXPlaceholderValue"]) ?? string(a[kAXDescriptionAttribute])
+        if label == nil, let t = element(el, kAXTitleUIElementAttribute) {
+            label = string(t, kAXValueAttribute) ?? string(t, kAXTitleAttribute)
+        }
+        return FocusedField(element: el, value: value, secure: secure, label: label.map { String($0.prefix(60)) })
     }
 
     /// A cheap summary of what a window looks like right now, for settle detection.

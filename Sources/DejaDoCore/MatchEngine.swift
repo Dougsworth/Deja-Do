@@ -116,6 +116,21 @@ public struct MatchReport {
     public let anchorsMatched: Int
 
     public var best: RankedCandidate? { ranked.first }
+
+    public init(decision: MatchDecision, ranked: [RankedCandidate], shift: CGVector?, anchorsMatched: Int) {
+        self.decision = decision
+        self.ranked = ranked
+        self.shift = shift
+        self.anchorsMatched = anchorsMatched
+    }
+
+    /// The same report when the window couldn't be scanned completely: the real
+    /// target may not have been looked at, so only a near perfect match stays confident.
+    public func incomplete() -> MatchReport {
+        guard case .confident(let top) = decision, top.score < 0.95 else { return self }
+        return MatchReport(decision: .ambiguous(Array(ranked.prefix(12))), ranked: ranked, shift: shift,
+                           anchorsMatched: anchorsMatched)
+    }
 }
 
 /// Finds a recorded element among the elements on screen now.

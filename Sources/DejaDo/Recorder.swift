@@ -41,6 +41,8 @@ final class Recorder: @unchecked Sendable {
     private var pendingCheck: (stepID: UUID, before: Int)?
     private var checkPairs: [(stepID: UUID, before: Int, after: Int)] = []
     private var lastExternalPID: pid_t?
+    /// Name of the field being typed into, read when typing starts.
+    private var pendingFieldLabel: String?
 
     /// Returns false if macOS refused the event tap (missing Input Monitoring permission).
     func start() -> Bool {
@@ -216,6 +218,7 @@ final class Recorder: @unchecked Sendable {
             if inSecureField { return }
             // Typing starts: whatever the last click or key did is done by now.
             if pendingText.isEmpty, pendingCheck != nil { closePendingCheck(at: snapshot()) }
+            if pendingText.isEmpty { pendingFieldLabel = AX.focusedField()?.label }
             noteFrontApp()
             pendingText += chars
             onChange?()
@@ -249,8 +252,10 @@ final class Recorder: @unchecked Sendable {
 
     private func flushText() {
         guard !pendingText.isEmpty else { return }
-        steps.append(Step(kind: .type(text: pendingText, askEachRun: false, secret: false, prompt: "")))
+        steps.append(Step(kind: .type(text: pendingText, askEachRun: false, secret: false, prompt: ""),
+                          fieldLabel: pendingFieldLabel))
         pendingText = ""
+        pendingFieldLabel = nil
     }
 
     // MARK: Screen reads
@@ -376,6 +381,7 @@ final class Recorder: @unchecked Sendable {
             let e = StepExpectation.derive(before: before, after: after, typed: typed)
             // Nothing changed when recording, so there is nothing to confirm on a run.
             steps[i].expect = e.changed ? e : nil
+            steps[i].noEffect = e.changed ? nil : true
         }
     }
 

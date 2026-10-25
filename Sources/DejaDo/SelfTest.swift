@@ -136,6 +136,59 @@ enum SelfTest {
         log.check("…without repeating the step", !notes.contains("trying once more"))
         log.line("      notes: \(notes)")
 
+        // 4b. A step that sends, saves or deletes is never repeated, even when nothing seemed to happen.
+        var riskyBroken = broken
+        if let i = riskyBroken.steps.lastIndex(where: { if case .click = $0.kind { return true }; return false }) {
+            riskyBroken.steps[i].risk = .risky
+        }
+        await press(["all clear", "clear", "ac", "c"])
+        let (riskyError, riskyNotes) = await runTask(riskyBroken, vision: vision)
+        log.check("A risky step stops without being repeated",
+                  riskyError != nil && !riskyNotes.contains("trying once more"), riskyError ?? "it finished")
+        log.check("…and the stop says it may already have happened", riskyError?.contains("may already have sent") == true,
+                  riskyError ?? "")
+
+        // 6. Check finds every button without clicking anything.
+        await press(["all clear", "clear", "ac", "c"])
+        let shown = displayText()
+        var found = 0, clicksToCheck = 0
+        for step in task.steps {
+            guard case .click(let t, _, _, _) = step.kind else { continue }
+            clicksToCheck += 1
+            if let o = ElementFinder.find(t, engine: MatchEngine()), case .confident = o.report.decision { found += 1 }
+        }
+        log.check("Check finds all \(clicksToCheck) buttons", found == clicksToCheck, "found \(found)")
+        log.check("…without pressing anything", displayText() == shown, "display before \(shown), after \(displayText())")
+
+        // 7. If another app jumps in front mid run, Deja Do brings Calculator back before the next click.
+        var slow = task
+        if let i = slow.steps.firstIndex(where: { if case .click = $0.kind { return true }; return false }) {
+            slow.steps.insert(Step(kind: .wait(seconds: 2)), at: i + 1)
+        }
+        await press(["all clear", "clear", "ac", "c"])
+        let finder = URL(fileURLWithPath: "/System/Library/CoreServices/Finder.app")
+        Task.detached {
+            try? await Task.sleep(nanoseconds: 1_800_000_000)
+            let config = NSWorkspace.OpenConfiguration()
+            config.activates = true
+            _ = try? await NSWorkspace.shared.openApplication(at: finder, configuration: config)
+        }
+        let (slowError, _) = await runTask(slow, vision: vision)
+        log.check("Brings the app back when another one jumps in front", slowError == nil && displayShows("15"),
+                  slowError ?? "display: \(displayText())")
+
+        // 8. Esc stops even a long Wait right away.
+        let waiting = Automation(name: "Wait", steps: [Step(kind: .wait(seconds: 30))])
+        let replayer = Replayer()
+        let stopAt = Date()
+        Task.detached {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            replayer.cancel()
+        }
+        _ = await runTask(waiting, vision: false, replayer: replayer)
+        let took = Date().timeIntervalSince(stopAt)
+        log.check("Stopping a 30 second wait takes effect at once", took < 2.5, String(format: "stopped after %.1fs", took))
+
         // 5. Only the screen: forget what Accessibility said and find each button by
         // its picture and text, like in a virtual machine. First with the window moved,
         // which is the everyday case, then in the Scientific layout as a stretch.
@@ -206,7 +259,7 @@ enum SelfTest {
         return "\(Int(f.minX)),\(Int(f.minY)) \(Int(f.width))×\(Int(f.height))"
     }
 
-    static func runTask(_ a: Automation, vision: Bool) async -> (error: String?, notes: String) {
+    static func runTask(_ a: Automation, vision: Bool, replayer: Replayer = Replayer()) async -> (error: String?, notes: String) {
         let collected = NotesBox()
         let settings = Replayer.Settings(ai: AIConfig(provider: .anthropic, model: "", key: ""), aiEnabled: false,
                                          visionEnabled: vision, checkSteps: true)
@@ -217,7 +270,7 @@ enum SelfTest {
             note: { i, text in collected.set(i, text) },
             tuned: { _, _ in })
         do {
-            try await Replayer().run(a, settings: settings, callbacks: callbacks)
+            try await replayer.run(a, settings: settings, callbacks: callbacks)
             return (nil, collected.summary)
         } catch {
             return (error.localizedDescription, collected.summary)
