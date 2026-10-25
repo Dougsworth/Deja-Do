@@ -29,6 +29,7 @@ final class AppModel: ObservableObject, @unchecked Sendable {
     private let recorder = Recorder()
     private let replayer = Replayer()
     private var permissionTimer: Timer?
+    private var runStarted: Date?
     private var escapeMonitor: Any?
 
     static let defaultModel = "claude-sonnet-5-5"
@@ -112,6 +113,7 @@ final class AppModel: ObservableObject, @unchecked Sendable {
         }
         runningID = automation.id
         runningStep = 0
+        runStarted = Date()
         status = "Running \(automation.name)…"
         startEscapeMonitor()
 
@@ -159,9 +161,12 @@ final class AppModel: ObservableObject, @unchecked Sendable {
         } else {
             status = "Done."
         }
+        let duration = runStarted.map { Date().timeIntervalSince($0) }
         update(id) { a in
             a.runs += failure == nil ? 1 : 0
             a.lastRun = Date()
+            a.lastSucceeded = failure == nil
+            a.lastDuration = duration
         }
     }
 

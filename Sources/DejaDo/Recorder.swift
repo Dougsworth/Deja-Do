@@ -47,10 +47,15 @@ final class Recorder {
                   let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
                   app.processIdentifier != self.ownPID,
                   let id = app.bundleIdentifier else { return }
+            // Chrome, Electron and some other apps only describe their buttons once asked.
+            AX.wake(pid: app.processIdentifier, bundleID: id)
             // Only note the switch; the step is added when the user actually does something there.
             self.pendingApp = (id, app.localizedName ?? id)
         }
 
+        if let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier != ownPID {
+            AX.wake(pid: front.processIdentifier, bundleID: front.bundleIdentifier ?? "")
+        }
         isRecording = true
         onChange?()
         return true
@@ -94,7 +99,10 @@ final class Recorder {
     private func handleClick(_ event: CGEvent, button: MouseButtonKind) {
         let point = event.location
         let clickState = Int(event.getIntegerValueField(.mouseEventClickState))
-        guard let capture = AX.capture(at: point) else { return }
+        if AX.isOwn(at: point) { return }
+        // If the app won't describe what was clicked, keep the click anyway as a
+        // position inside its window rather than silently losing a step.
+        guard let capture = AX.capture(at: point) ?? AX.positionCapture(at: point) else { return }
         let target = capture.locator
         flushText()
         inSecureField = capture.isSecureField

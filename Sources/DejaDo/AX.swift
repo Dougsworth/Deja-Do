@@ -128,6 +128,46 @@ enum AX {
         }
     }
 
+    static func wake(pid: pid_t, bundleID: String) {
+        let el = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(el, 0.5)
+        wake(app: el, bundleID: bundleID)
+    }
+
+    /// True when the point is over one of Deja Do's own windows or menus.
+    static func isOwn(at point: CGPoint) -> Bool {
+        let me = ProcessInfo.processInfo.processIdentifier
+        if let hit = element(at: point) { return pid(hit) == me }
+        let height = NSScreen.screens.first?.frame.height ?? 0
+        let flipped = NSPoint(x: point.x, y: height - point.y)
+        return NSApp.windows.contains { $0.isVisible && $0.frame.contains(flipped) }
+    }
+
+    /// Role used for clicks recorded only by where they landed in the window.
+    static let positionRole = "AXPosition"
+
+    /// A click the app couldn't describe: remember where in the frontmost
+    /// window it landed, so replay can click the same spot.
+    static func positionCapture(at point: CGPoint) -> Capture? {
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return nil }
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(appElement, 0.5)
+        let window = element(appElement, kAXFocusedWindowAttribute)
+        let wf = window.flatMap { frame($0) }
+        let origin = wf?.origin ?? .zero
+        let spot = CGRect(x: point.x - origin.x - 4, y: point.y - origin.y - 4, width: 8, height: 8)
+        let bundleID = app.bundleIdentifier ?? app.localizedName ?? "unknown"
+        let locator = ElementLocator(
+            bundleID: bundleID, appName: app.localizedName ?? bundleID,
+            windowTitle: window.flatMap { string($0, kAXTitleAttribute) },
+            role: positionRole, subrole: nil, title: nil, desc: nil, identifier: nil, help: nil,
+            value: nil, label: nil, path: [], frameInWindow: spot,
+            clickOffset: CGPoint(x: 0.5, y: 0.5), inMenu: false, anchors: nil, context: nil,
+            windowSize: wf?.size)
+        return Capture(locator: locator, isSecureField: false)
+    }
+
     // MARK: Nodes
 
     static let nodeAttrs: [String] = [

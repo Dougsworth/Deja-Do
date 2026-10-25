@@ -127,9 +127,14 @@ public struct Automation: Identifiable, Codable, Equatable {
     public var runs = 0
     /// How many times AI found an element the recording could not.
     public var repairs = 0
+    /// Whether the most recent run finished. Optional so older files still load.
+    public var lastSucceeded: Bool?
+    /// How long the most recent run took, in seconds.
+    public var lastDuration: Double?
 
     public init(id: UUID = UUID(), name: String, steps: [Step], created: Date = Date(),
-                lastRun: Date? = nil, runs: Int = 0, repairs: Int = 0) {
+                lastRun: Date? = nil, runs: Int = 0, repairs: Int = 0,
+                lastSucceeded: Bool? = nil, lastDuration: Double? = nil) {
         self.id = id
         self.name = name
         self.steps = steps
@@ -137,6 +142,8 @@ public struct Automation: Identifiable, Codable, Equatable {
         self.lastRun = lastRun
         self.runs = runs
         self.repairs = repairs
+        self.lastSucceeded = lastSucceeded
+        self.lastDuration = lastDuration
     }
 }
 
@@ -159,6 +166,9 @@ extension Step {
             return "Switch to \(name)"
         case .click(let t, let button, let count, _):
             let verb = count >= 2 ? "Double click" : (button == .right ? "Right click" : "Click")
+            if t.role == "AXPosition", let f = t.frameInWindow {
+                return "\(verb) at \(Int(f.midX)), \(Int(f.midY)) in the window"
+            }
             let what = Self.friendlyRole(t.role, subrole: t.subrole)
             if let label = t.label, !label.isEmpty {
                 return "\(verb) \(what) “\(label.prefix(60))”"

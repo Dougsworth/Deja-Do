@@ -50,6 +50,10 @@ final class Replayer {
                 try await activate(bundleID: bundleID, name: name)
 
             case .click(let target, let button, let count, let modifiers):
+                if target.role == AX.positionRole {
+                    try await clickPosition(target, button: button, count: count, modifiers: modifiers)
+                    break
+                }
                 let match = try await locate(target, stepIndex: i, settings: settings, callbacks: callbacks)
                 try click(match: match, target: target, button: button, count: count, modifiers: modifiers)
 
@@ -199,6 +203,22 @@ final class Replayer {
         let oy = min(max(target.clickOffset.y, 0.1), 0.9)
         let point = CGPoint(x: f.minX + f.width * ox, y: f.minY + f.height * oy)
         Input.click(at: point, button: button, count: count, modifiers: modifiers)
+    }
+
+    /// Replays a click recorded only by position, scaled if the window was resized.
+    private func clickPosition(_ target: ElementLocator, button: MouseButtonKind, count: Int,
+                               modifiers: UInt64) async throws {
+        await settle(bundleID: target.bundleID, maxWait: 1.5)
+        guard let root = ElementFinder.root(for: target), let wf = root.windowFrame,
+              let spot = target.frameInWindow else {
+            throw ReplayError("Couldn't find the \(target.appName) window to click in.")
+        }
+        var x = spot.midX, y = spot.midY
+        if let old = target.windowSize, old.width > 0, old.height > 0 {
+            x = x * wf.width / old.width
+            y = y * wf.height / old.height
+        }
+        Input.click(at: CGPoint(x: wf.minX + x, y: wf.minY + y), button: button, count: count, modifiers: modifiers)
     }
 
     // MARK: Waiting
