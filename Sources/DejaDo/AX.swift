@@ -553,7 +553,12 @@ enum AX {
     static func webIdentity(inWindow window: AXUIElement) -> WebIdentity? {
         let areas = collect(from: window, origin: nil, limit: 600) { $0 == "AXWebArea" }
         // Several web areas (tabs, embedded frames): the biggest is the page.
-        let page = areas.max { ($0.node.frame?.width ?? 0) * ($0.node.frame?.height ?? 0) < ($1.node.frame?.width ?? 0) * ($1.node.frame?.height ?? 0) }
-        return page.flatMap { url(of: $0.element) }.flatMap(WebIdentity.init(url:))
+        func area(_ f: Found) -> CGFloat {
+            guard let r = f.node.frame else { return 0 }
+            return r.width * r.height
+        }
+        guard let page = areas.max(by: { area($0) < area($1) }) else { return nil }
+        guard let u = url(of: page.element) else { return nil }
+        return WebIdentity(url: u)
     }
 }

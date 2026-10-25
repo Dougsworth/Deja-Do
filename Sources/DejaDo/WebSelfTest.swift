@@ -149,16 +149,21 @@ enum WebSelfTest {
             let retried = notes.contains("trying once more")
             let detail = "submits \(s.submits), feedback \(s.feedback), confirms \(s.confirms), got it \(s.gotIt)"
                 + (error.map { " · stopped: \($0)" } ?? "")
-            let rightValues = s.lastName == "Ana" && s.lastEmail == "ana@example.com"
+            let rightValues: Bool = s.lastName == "Ana" && s.lastEmail == "ana@example.com"
+            let finished: Bool = error == nil
+            let sentOnce: Bool = s.submits == 1
+            let sentNothing: Bool = s.submits == 0
+            let noWrongButton: Bool = s.feedback == 0
             let ok: Bool
             switch scenario.rule {
             case .mustSubmit:
-                ok = error == nil && s.submits == 1 && s.feedback == 0 && rightValues && !retried
+                ok = finished && sentOnce && noWrongButton && rightValues && !retried
             case .submitOrStop:
-                ok = s.feedback == 0 && s.submits <= 1 && !retried
-                    && ((error == nil && s.submits == 1 && rightValues) || (error != nil && s.submits == 0))
+                let good: Bool = finished && sentOnce && rightValues
+                let safe: Bool = !finished && sentNothing
+                ok = noWrongButton && !retried && (good || safe)
             case .mustStop:
-                ok = error != nil && s.submits == 0 && s.confirms == 0 && !retried
+                ok = !finished && sentNothing && s.confirms == 0 && !retried
             }
             log.check(scenario.name, ok, detail)
             if s.submits > 1 { log.line("      SUBMITTED TWICE, this must never happen") }
