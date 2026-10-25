@@ -11,7 +11,7 @@ struct DejaDoApp: App {
             MenuContent()
                 .environmentObject(model)
         } label: {
-            Image(systemName: menuIcon)
+            MenuBarLabel(model: model)
         }
 
         Window("Deja Do", id: "main") {
@@ -21,8 +21,27 @@ struct DejaDoApp: App {
         }
         .defaultSize(width: 860, height: 560)
     }
+}
 
-    private var menuIcon: String {
+/// The menu bar icon. It also opens the main window once at launch: a menu
+/// bar app shows no window or Dock icon, and on a crowded menu bar the icon
+/// itself can be hidden behind the notch, so launching would look like nothing.
+struct MenuBarLabel: View {
+    @ObservedObject var model: AppModel
+    @Environment(\.openWindow) private var openWindow
+    private static var openedAtLaunch = false
+
+    var body: some View {
+        Image(systemName: icon)
+            .task {
+                guard !Self.openedAtLaunch else { return }
+                Self.openedAtLaunch = true
+                openWindow(id: "main")
+                NSApp.activate(ignoringOtherApps: true)
+            }
+    }
+
+    private var icon: String {
         if model.isRecording { return "record.circle" }
         if model.runningID != nil { return "play.circle" }
         return "repeat"
