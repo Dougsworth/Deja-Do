@@ -2,8 +2,9 @@ import AppKit
 import SwiftUI
 import DejaDoCore
 
-/// App state shared by the menu bar and the main window. Only touched on the main thread.
-final class AppModel: ObservableObject {
+/// App state shared by the menu bar and the main window. Only touched on the
+/// main thread, which is why it can be marked as safe to hand across tasks.
+final class AppModel: ObservableObject, @unchecked Sendable {
     @Published var automations: [Automation] = []
     @Published var selection: UUID?
 

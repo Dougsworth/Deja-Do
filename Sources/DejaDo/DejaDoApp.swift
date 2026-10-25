@@ -19,7 +19,8 @@ struct DejaDoApp: App {
                 .environmentObject(model)
                 .frame(minWidth: 720, minHeight: 460)
         }
-        .defaultSize(width: 860, height: 560)
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 900, height: 600)
     }
 }
 

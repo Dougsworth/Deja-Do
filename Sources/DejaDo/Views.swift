@@ -2,81 +2,148 @@ import SwiftUI
 import AppKit
 import DejaDoCore
 
+// Layout is built from type, whitespace and hairlines: no tinted cards,
+// no badges, no boxed icons. One accent colour marks what is active.
+
+enum Metrics {
+    static let sidebarWidth: CGFloat = 248
+    static let gutter: CGFloat = 40
+    static let titleTop: CGFloat = 46
+}
+
 struct MainView: View {
     @EnvironmentObject var model: AppModel
     @State private var showSettings = false
 
     var body: some View {
-        NavigationSplitView {
-            List(selection: $model.selection) {
-                ForEach(model.automations) { a in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(a.name).lineLimit(1)
-                        Text("\(a.steps.count) steps").font(.caption).foregroundStyle(.secondary)
-                    }
-                    .padding(.vertical, 3)
-                    .tag(a.id)
-                    .contextMenu {
-                        Button("Run") { model.run(a) }
-                        Button("Duplicate") { model.duplicate(a.id) }
-                        Divider()
-                        Button("Delete", role: .destructive) { model.delete(a.id) }
-                    }
-                }
-            }
-            .navigationSplitViewColumnWidth(min: 200, ideal: 230)
-            .safeAreaInset(edge: .bottom) {
-                HStack {
-                    Button {
-                        showSettings = true
-                    } label: {
-                        Image(systemName: "gearshape")
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .help("Settings")
-                    Spacer()
-                }
-                .padding(12)
-            }
-        } detail: {
-            VStack(alignment: .leading, spacing: 0) {
+        HStack(spacing: 0) {
+            Sidebar(showSettings: $showSettings)
+                .frame(width: Metrics.sidebarWidth)
+            Divider()
+            Group {
                 if !model.permissionsReady {
                     PermissionsView()
-                    Divider()
-                }
-                if model.isRecording {
+                } else if model.isRecording {
                     RecordingView()
                 } else if let id = model.selection, let binding = model.binding(for: id) {
-                    AutomationView(automation: binding)
-                        .id(id)
+                    AutomationView(automation: binding).id(id)
                 } else {
                     EmptyStateView()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .toolbar {
-            ToolbarItem {
-                if model.isRecording {
-                    Button {
-                        model.stopRecording()
-                    } label: {
-                        Label("Stop and Save", systemImage: "stop.circle")
-                    }
-                } else {
-                    Button {
-                        model.startRecording()
-                    } label: {
-                        Label("Record", systemImage: "record.circle")
-                    }
-                    .disabled(model.runningID != nil)
-                    .help("Record a task")
-                }
-            }
-        }
+        .background(Color(nsColor: .windowBackgroundColor))
+        .ignoresSafeArea(.container, edges: .top)
         .sheet(isPresented: $showSettings) {
             SettingsView().environmentObject(model)
+        }
+    }
+}
+
+// MARK: - Sidebar
+
+struct Sidebar: View {
+    @EnvironmentObject var model: AppModel
+    @Binding var showSettings: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Deja Do")
+                .font(.system(size: 13, weight: .semibold))
+                .padding(.horizontal, 20)
+                .padding(.top, Metrics.titleTop)
+                .padding(.bottom, 16)
+
+            if model.automations.isEmpty {
+                Text("Your recorded tasks will show up here.")
+                    .font(.callout)
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 20)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(model.automations) { a in
+                        SidebarRow(automation: a)
+                    }
+                }
+            }
+
+            Divider()
+
+            HStack(spacing: 0) {
+                Button {
+                    if model.isRecording { model.stopRecording() } else { model.startRecording() }
+                } label: {
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(Color.red)
+                            .frame(width: 7, height: 7)
+                        Text(model.isRecording ? "Stop and save" : "Record a task")
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(model.runningID != nil)
+                .keyboardShortcut("r", modifiers: .command)
+
+                Spacer()
+
+                Button {
+                    showSettings = true
+                } label: {
+                    Image(systemName: "gearshape")
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Settings")
+            }
+            .font(.system(size: 13))
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
+        }
+    }
+}
+
+struct SidebarRow: View {
+    @EnvironmentObject var model: AppModel
+    let automation: Automation
+
+    private var selected: Bool { model.selection == automation.id && !model.isRecording }
+    private var running: Bool { model.runningID == automation.id }
+
+    var body: some View {
+        Button {
+            model.selection = automation.id
+        } label: {
+            HStack(spacing: 0) {
+                Rectangle()
+                    .fill(selected ? Color.accentColor : .clear)
+                    .frame(width: 2)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(automation.name)
+                        .font(.system(size: 13, weight: selected ? .semibold : .regular))
+                        .foregroundStyle(selected ? .primary : .secondary)
+                        .lineLimit(1)
+                    Text(running ? "Running step \(model.runningStep + 1)" : "\(automation.steps.count) steps")
+                        .font(.system(size: 11))
+                        .foregroundStyle(running ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.tertiary))
+                }
+                .padding(.leading, 18)
+                .padding(.vertical, 8)
+                Spacer(minLength: 8)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button("Run") { model.run(automation) }
+            Button("Duplicate") { model.duplicate(automation.id) }
+            Divider()
+            Button("Delete", role: .destructive) { model.delete(automation.id) }
         }
     }
 }
@@ -91,41 +158,55 @@ struct AutomationView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .firstTextBaseline) {
-                    TextField("Name", text: $automation.name)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 22, weight: .semibold))
-                    Spacer()
+            VStack(alignment: .leading, spacing: 8) {
+                TextField("Name", text: $automation.name)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 26, weight: .semibold))
+
+                Text(meta)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 14) {
                     if isRunning {
                         Button("Stop") { model.stopRun() }
+                            .controlSize(.large)
+                        Text("Step \(model.runningStep + 1) of \(automation.steps.count). Esc also stops it.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
                     } else {
                         Button("Run") { model.run(automation) }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.large)
                             .keyboardShortcut(.return, modifiers: .command)
                             .disabled(model.runningID != nil || model.isRecording)
+                        Text("⌘↩")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.tertiary)
                     }
                 }
-                Text(meta)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                .padding(.top, 10)
+
                 if let status = model.status, isRunning || model.runningID == nil {
                     Text(status)
-                        .font(.callout)
+                        .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .lineLimit(3)
+                        .padding(.top, 2)
                 }
             }
-            .padding(.horizontal, 28)
-            .padding(.top, 24)
-            .padding(.bottom, 16)
+            .padding(.horizontal, Metrics.gutter)
+            .padding(.top, Metrics.titleTop)
+            .padding(.bottom, 22)
 
             Divider()
 
             List {
                 ForEach($automation.steps) { $step in
-                    StepRow(step: $step,
-                            number: number(of: step),
-                            isCurrent: isRunning && model.runningStep == number(of: step) - 1)
+                    let n = number(of: step)
+                    StepRow(step: $step, number: n, isCurrent: isRunning && model.runningStep == n - 1)
+                        .listRowSeparator(.visible)
+                        .listRowInsets(EdgeInsets(top: 0, leading: Metrics.gutter - 8, bottom: 0, trailing: Metrics.gutter - 8))
                         .contextMenu {
                             Button("Add a 2 second wait after") { insertWait(after: step) }
                             Divider()
@@ -136,19 +217,20 @@ struct AutomationView: View {
                 .onDelete { automation.steps.remove(atOffsets: $0) }
             }
             .listStyle(.plain)
+            .scrollContentBackground(.hidden)
         }
     }
 
     private var meta: String {
         var parts = ["\(automation.steps.count) steps"]
-        parts.append(automation.runs == 1 ? "ran once" : "ran \(automation.runs) times")
+        parts.append(automation.runs == 0 ? "not run yet" : (automation.runs == 1 ? "ran once" : "ran \(automation.runs) times"))
         if automation.repairs > 0 {
             parts.append("AI fixed \(automation.repairs) step\(automation.repairs == 1 ? "" : "s")")
         }
         if let last = automation.lastRun {
             parts.append("last run \(last.formatted(.relative(presentation: .named)))")
         }
-        return parts.joined(separator: " · ")
+        return parts.joined(separator: "  ·  ")
     }
 
     private func number(of step: Step) -> Int {
@@ -165,50 +247,78 @@ struct AutomationView: View {
     }
 }
 
+/// One numbered line in a step list. Used for saved and live steps alike.
+struct StepLine<Editor: View>: View {
+    let number: Int?
+    let symbol: String
+    let summary: String
+    let detail: String?
+    var isCurrent = false
+    var dimmed = false
+    @ViewBuilder var editor: () -> Editor
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 14) {
+            Text(number.map(String.init) ?? "")
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(isCurrent ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.tertiary))
+                .frame(width: 22, alignment: .trailing)
+            Image(systemName: symbol)
+                .font(.system(size: 11))
+                .foregroundStyle(isCurrent ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.tertiary))
+                .frame(width: 14)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(summary)
+                    .font(.system(size: 13, weight: isCurrent ? .semibold : .regular))
+                    .foregroundStyle(dimmed ? .secondary : .primary)
+                if let detail {
+                    Text(detail)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                editor()
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 11)
+    }
+}
+
 struct StepRow: View {
     @Binding var step: Step
     let number: Int
     let isCurrent: Bool
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 14) {
-            Text("\(number)")
-                .font(.system(.callout, design: .monospaced))
-                .foregroundStyle(isCurrent ? Color.accentColor : .secondary)
-                .frame(width: 26, alignment: .trailing)
-            Image(systemName: step.symbol)
-                .foregroundStyle(isCurrent ? Color.accentColor : .secondary)
-                .frame(width: 18)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(step.summary)
-                    .fontWeight(isCurrent ? .semibold : .regular)
-                if let detail = step.detail {
-                    Text(detail).font(.caption).foregroundStyle(.secondary)
-                }
-                editor
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.vertical, 6)
+        StepLine(number: number, symbol: step.symbol, summary: step.summary, detail: step.detail,
+                 isCurrent: isCurrent) { editor }
     }
 
     @ViewBuilder private var editor: some View {
         switch step.kind {
         case .type(_, _, let secret, _) where !secret:
-            HStack(spacing: 16) {
-                TextField("Text", text: typedText)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 340)
-                    .disabled(askEachRun.wrappedValue)
+            HStack(spacing: 18) {
+                VStack(spacing: 3) {
+                    TextField("Text to type", text: typedText)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 12))
+                        .disabled(askEachRun.wrappedValue)
+                    Divider()
+                }
+                .frame(maxWidth: 320)
                 Toggle("Ask each run", isOn: askEachRun)
                     .toggleStyle(.checkbox)
-                    .font(.caption)
+                    .font(.system(size: 11))
             }
+            .padding(.top, 4)
         case .wait:
             Stepper(value: waitSeconds, in: 0.5...60, step: 0.5) {
-                Text("\(waitSeconds.wrappedValue.formatted()) seconds").font(.caption).foregroundStyle(.secondary)
+                Text("\(waitSeconds.wrappedValue, specifier: "%g") seconds")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
             }
             .frame(maxWidth: 200, alignment: .leading)
+            .padding(.top, 2)
         default:
             EmptyView()
         }
@@ -248,52 +358,62 @@ struct StepRow: View {
 
 struct RecordingView: View {
     @EnvironmentObject var model: AppModel
+    @State private var pulse = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
-                    Circle().fill(Color.red).frame(width: 8, height: 8)
-                    Text("Recording").font(.system(size: 22, weight: .semibold))
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 10) {
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: 9, height: 9)
+                        .opacity(pulse ? 0.25 : 1)
+                        .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulse)
+                    Text("Recording")
+                        .font(.system(size: 26, weight: .semibold))
                 }
-                Text("Do the task the way you normally would. Every click, keystroke and app switch is saved as a step. Passwords are never recorded.")
+                Text("Do the task the way you normally would. Every click, keystroke and app switch becomes a step. Passwords are never recorded.")
+                    .font(.system(size: 13))
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: 520, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 16) {
+                HStack(spacing: 18) {
                     Button("Stop and Save") { model.stopRecording() }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
                         .keyboardShortcut(.return, modifiers: .command)
                     Button("Discard") { model.discardRecording() }
                         .buttonStyle(.plain)
                         .foregroundStyle(.secondary)
                 }
-                .padding(.top, 6)
+                .padding(.top, 10)
             }
-            .padding(.horizontal, 28)
-            .padding(.top, 24)
-            .padding(.bottom, 16)
+            .padding(.horizontal, Metrics.gutter)
+            .padding(.top, Metrics.titleTop)
+            .padding(.bottom, 22)
+            .onAppear { pulse = true }
 
             Divider()
 
-            List {
-                ForEach(Array(model.liveSteps.enumerated()), id: \.element.id) { i, step in
-                    HStack(alignment: .firstTextBaseline, spacing: 14) {
-                        Text("\(i + 1)").font(.system(.callout, design: .monospaced)).foregroundStyle(.secondary)
-                            .frame(width: 26, alignment: .trailing)
-                        Image(systemName: step.symbol).foregroundStyle(.secondary).frame(width: 18)
-                        Text(step.summary)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(model.liveSteps.enumerated()), id: \.element.id) { i, step in
+                        StepLine(number: i + 1, symbol: step.symbol, summary: step.summary, detail: step.detail) { EmptyView() }
+                        Divider()
                     }
-                    .padding(.vertical, 4)
-                }
-                if !model.pendingText.isEmpty {
-                    HStack(alignment: .firstTextBaseline, spacing: 14) {
-                        Text("").frame(width: 26)
-                        Image(systemName: "character.cursor.ibeam").foregroundStyle(.secondary).frame(width: 18)
-                        Text("Typing “\(model.pendingText)”").foregroundStyle(.secondary)
+                    if !model.pendingText.isEmpty {
+                        StepLine(number: nil, symbol: "character.cursor.ibeam",
+                                 summary: "Typing “\(model.pendingText)”", detail: nil, dimmed: true) { EmptyView() }
                     }
-                    .padding(.vertical, 4)
+                    if model.liveSteps.isEmpty && model.pendingText.isEmpty {
+                        Text("Waiting for your first click…")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.tertiary)
+                            .padding(.vertical, 14)
+                    }
                 }
+                .padding(.horizontal, Metrics.gutter - 8)
             }
-            .listStyle(.plain)
         }
     }
 }
@@ -301,19 +421,29 @@ struct RecordingView: View {
 // MARK: - Empty state and permissions
 
 struct EmptyStateView: View {
+    @EnvironmentObject var model: AppModel
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Do it once.").font(.system(size: 28, weight: .semibold))
-            Text("Record a boring task, like downloading a report, renaming it and emailing it. Deja Do saves every step and repeats the whole thing for you. If a button moves or gets renamed later, it finds it again, and asks AI only when it isn't sure.")
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Do it once.")
+                .font(.system(size: 30, weight: .semibold))
+            Text("Record a boring task, like downloading a report, renaming it and emailing it. Deja Do saves every step and does the whole thing for you from then on. If a button moves or gets renamed, it finds it again.")
+                .font(.system(size: 14))
                 .foregroundStyle(.secondary)
-                .frame(maxWidth: 460, alignment: .leading)
+                .frame(maxWidth: 480, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("Press Record in the toolbar, or use the ↻ menu in the menu bar.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .padding(.top, 6)
+            HStack(spacing: 14) {
+                Button("Record a task") { model.startRecording() }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                Text("⌘R")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.top, 10)
         }
-        .padding(40)
+        .padding(.horizontal, Metrics.gutter)
+        .padding(.top, Metrics.titleTop)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
@@ -322,42 +452,58 @@ struct PermissionsView: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Two permissions first").font(.headline)
-            Text("macOS has to let Deja Do see and press buttons in other apps, and notice your clicks and keys while you record.")
-                .font(.callout)
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Two permissions first")
+                .font(.system(size: 26, weight: .semibold))
+            Text("macOS has to let Deja Do press buttons in other apps, and notice your clicks and keys while you record. Nothing leaves your Mac.")
+                .font(.system(size: 13))
                 .foregroundStyle(.secondary)
+                .frame(maxWidth: 520, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
-            row("Accessibility", detail: "Find and press buttons when replaying", granted: model.hasAccessibility) {
+                .padding(.top, 8)
+                .padding(.bottom, 26)
+
+            Divider()
+            row("Accessibility", detail: "Find and press buttons when a task runs", granted: model.hasAccessibility) {
                 Permissions.requestAccessibility()
                 Permissions.openAccessibilitySettings()
             }
-            row("Input Monitoring", detail: "Notice clicks and typing while recording", granted: model.hasInputMonitoring) {
+            Divider()
+            row("Input Monitoring", detail: "Notice clicks and typing while you record", granted: model.hasInputMonitoring) {
                 Permissions.requestInputMonitoring()
                 Permissions.openInputMonitoringSettings()
             }
-            Text("After switching them on you may need to quit and reopen Deja Do.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            Divider()
+
+            Text("Switch both on in System Settings, then quit and reopen Deja Do. This page updates by itself.")
+                .font(.system(size: 12))
+                .foregroundStyle(.tertiary)
+                .padding(.top, 18)
         }
-        .padding(.horizontal, 28)
-        .padding(.vertical, 20)
+        .frame(maxWidth: 560, alignment: .leading)
+        .padding(.horizontal, Metrics.gutter)
+        .padding(.top, Metrics.titleTop)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private func row(_ title: String, detail: String, granted: Bool, action: @escaping () -> Void) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: granted ? "checkmark.circle" : "circle")
-                .foregroundStyle(granted ? Color.green : .secondary)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                Text(detail).font(.caption).foregroundStyle(.secondary)
+        HStack(alignment: .center, spacing: 14) {
+            Image(systemName: granted ? "checkmark" : "circle")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(granted ? AnyShapeStyle(Color.green) : AnyShapeStyle(.tertiary))
+                .frame(width: 16)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.system(size: 13, weight: .medium))
+                Text(detail).font(.system(size: 12)).foregroundStyle(.secondary)
             }
             Spacer()
-            if !granted {
+            if granted {
+                Text("On").font(.system(size: 12)).foregroundStyle(.secondary)
+            } else {
                 Button("Open Settings", action: action)
             }
         }
-        .frame(maxWidth: 520)
+        .padding(.vertical, 14)
     }
 }
 
@@ -368,38 +514,63 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Settings").font(.system(size: 20, weight: .semibold))
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Settings")
+                .font(.system(size: 20, weight: .semibold))
+                .padding(.bottom, 18)
+
+            Divider()
 
             Toggle("Ask AI when a button can't be found with confidence", isOn: $model.aiEnabled)
+                .font(.system(size: 13))
+                .padding(.vertical, 14)
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Anthropic API key").font(.callout)
+            Divider()
+
+            field("Anthropic API key",
+                  note: "Kept in your keychain. Only a text list of the window's buttons and labels is sent, never your screen or what you typed.") {
                 SecureField("sk-ant-…", text: $model.apiKey)
-                    .textFieldStyle(.roundedBorder)
-                Text("Stored in your keychain. Only a list of the window's buttons and labels is sent, never your screen or what you typed.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
             .disabled(!model.aiEnabled)
+            .opacity(model.aiEnabled ? 1 : 0.5)
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Model").font(.callout)
+            Divider()
+
+            field("Model", note: nil) {
                 TextField(AppModel.defaultModel, text: $model.model)
-                    .textFieldStyle(.roundedBorder)
             }
             .disabled(!model.aiEnabled)
+            .opacity(model.aiEnabled ? 1 : 0.5)
 
             Divider()
 
             HStack {
-                Text("Esc stops a running automation.").font(.caption).foregroundStyle(.secondary)
+                Text("Esc stops a running task.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.tertiary)
                 Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(.top, 18)
+        }
+        .padding(28)
+        .frame(width: 460)
+    }
+
+    private func field<F: View>(_ title: String, note: String?, @ViewBuilder input: () -> F) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
+            input()
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+            if let note {
+                Text(note)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(24)
-        .frame(width: 440)
+        .padding(.vertical, 14)
     }
 }

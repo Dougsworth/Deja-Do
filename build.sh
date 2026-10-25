@@ -34,6 +34,11 @@ fi
 
 echo "Built $APP"
 if [ "${1:-}" = "run" ]; then
+  # Install to ~/Applications so Spotlight and Launchpad can find it too.
   pkill -x DejaDo 2>/dev/null || true
-  open "$APP"
+  mkdir -p "$HOME/Applications"
+  rm -rf "$HOME/Applications/Deja Do.app"
+  cp -R "$APP" "$HOME/Applications/"
+  echo "Installed to ~/Applications/Deja Do.app"
+  open "$HOME/Applications/Deja Do.app"
 fi
