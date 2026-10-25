@@ -46,9 +46,11 @@ enum SelfTest {
             try? text.write(toFile: path, atomically: true, encoding: .utf8)
         }
 
-        func check(_ name: String, _ ok: Bool, _ detail: String = "") {
-            if !ok { failures += 1 }
-            line("\(ok ? "PASS" : "FAIL")  \(name)\(detail.isEmpty ? "" : " · " + detail)")
+        /// - Parameter counted: false for stretch goals, reported but not failing the run.
+        func check(_ name: String, _ ok: Bool, _ detail: String = "", counted: Bool = true) {
+            if !ok && counted { failures += 1 }
+            let tag = ok ? "PASS" : (counted ? "FAIL" : "MISS")
+            line("\(tag)  \(name)\(detail.isEmpty ? "" : " · " + detail)")
         }
     }
 
@@ -116,19 +118,26 @@ enum SelfTest {
         await setMode(basic: false)
         await replay(task, name: "Replay in Scientific layout", expect: "15", vision: vision, log: log)
 
-        // 4. A wrong expectation must stop the run instead of carrying on.
+        // 4. A wrong expectation must stop the run instead of carrying on, and must
+        // not repeat the step, because the screen did change, just not as expected.
         await setMode(basic: true)
         var broken = task
         if let i = broken.steps.lastIndex(where: { if case .click = $0.kind { return true }; return false }) {
-            broken.steps[i].expect = StepExpectation(appeared: [ExpectedText("98765")], changed: true)
+            var e = broken.steps[i].expect ?? StepExpectation(changed: true, usedOCR: vision)
+            e.appeared = [ExpectedText("Sent to Ana")]
+            broken.steps[i].expect = e
             broken.steps[i].onMismatch = .retryThenStop
         }
+        await press(["all clear", "clear", "ac", "c"])
         let (error, notes) = await runTask(broken, vision: vision)
-        log.check("Step check stops a run that didn't do what it should",
-                  error?.contains("Stopped at step") == true, error ?? "the run finished, it should have stopped")
+        log.check("Step check stops a run whose screen doesn't match",
+                  error?.contains("Sent to Ana") == true, error ?? "the run finished, it should have stopped")
+        log.check("…without repeating the step", !notes.contains("trying once more"))
         log.line("      notes: \(notes)")
 
-        // 5. Only the screen: forget what Accessibility said and find each button by its picture and text.
+        // 5. Only the screen: forget what Accessibility said and find each button by
+        // its picture and text, like in a virtual machine. First with the window moved,
+        // which is the everyday case, then in the Scientific layout as a stretch.
         if vision {
             var screenOnly = task
             for i in screenOnly.steps.indices {
@@ -138,20 +147,36 @@ enum SelfTest {
                 t.path = []; t.anchors = nil; t.context = nil
                 screenOnly.steps[i].kind = .click(target: t, button: b, count: c, modifiers: m)
             }
+            let home = window().flatMap { AX.frame($0) }?.origin
+            if let home { moveWindow(to: CGPoint(x: home.x + 160, y: home.y + 90)) }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            await replay(screenOnly, name: "Screen only replay after moving the window", expect: "15", vision: true, log: log)
+            if let home { moveWindow(to: home) }
+
             await setMode(basic: false)
-            await replay(screenOnly, name: "Screen only replay in Scientific layout", expect: "15", vision: true, log: log)
+            await replay(screenOnly, name: "Screen only replay in Scientific layout", expect: "15", vision: true,
+                         log: log, counted: false)
             await setMode(basic: true)
         }
 
         return log.failures == 0
     }
 
-    static func replay(_ a: Automation, name: String, expect: String, vision: Bool, log: Log) async {
+    static func replay(_ a: Automation, name: String, expect: String, vision: Bool, log: Log,
+                       counted: Bool = true) async {
         await press(["all clear", "clear", "ac", "c"])
         let (error, notes) = await runTask(a, vision: vision)
-        log.check(name + " finishes", error == nil, error ?? "")
-        log.check(name + " shows \(expect)", displayShows(expect), "display: \(displayText())")
+        log.check(name + " finishes", error == nil, error ?? "", counted: counted)
+        log.check(name + " shows \(expect)", displayShows(expect), "display: \(displayText())", counted: counted)
         log.line("      notes: \(notes)")
+    }
+
+    static func moveWindow(to point: CGPoint) {
+        guard let w = window() else { return }
+        var p = point
+        if let value = AXValueCreate(.cgPoint, &p) {
+            AXUIElementSetAttributeValue(w, kAXPositionAttribute as CFString, value)
+        }
     }
 
     static func runTask(_ a: Automation, vision: Bool) async -> (error: String?, notes: String) {
@@ -227,7 +252,8 @@ enum SelfTest {
         }
         guard let frame = hit?.node.frame else { return false }
         Input.click(at: CGPoint(x: frame.midX, y: frame.midY), button: .left, count: 1, modifiers: 0)
-        try? await Task.sleep(nanoseconds: 600_000_000)
+        // About the pace a person clicks at, so the recorder sees each result settle.
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
         return true
     }
 

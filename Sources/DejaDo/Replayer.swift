@@ -370,9 +370,14 @@ final class Replayer {
     private func clickPosition(_ target: ElementLocator, button: MouseButtonKind, count: Int,
                                modifiers: UInt64) async throws {
         await settle(bundleID: target.bundleID, maxWait: 1.5)
-        guard let root = ElementFinder.root(for: target), let wf = root.windowFrame,
-              let spot = target.frameInWindow else {
-            throw ReplayError("Couldn't find the \(target.appName) window to click in.")
+        guard let spot = target.frameInWindow else {
+            throw ReplayError("The recording doesn't say where in the \(target.appName) window to click.")
+        }
+        guard let root = ElementFinder.root(for: target) else {
+            throw ReplayError("Couldn't find a \(target.appName) window to click in.")
+        }
+        guard let wf = root.windowFrame else {
+            throw ReplayError("Couldn't tell where the \(target.appName) window is on screen.")
         }
         var x = spot.midX, y = spot.midY
         if let old = target.windowSize, old.width > 0, old.height > 0 {

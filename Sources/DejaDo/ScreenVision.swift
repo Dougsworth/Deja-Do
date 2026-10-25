@@ -25,7 +25,7 @@ enum ScreenVision {
         let image: GrayImage
         let lines: [OCRLine]
 
-        var thumbnail: GrayImage { image.resized(width: 64, height: 40) }
+        var thumbnail: GrayImage { image.resized(width: 128, height: 80) }
     }
 
     /// Captures a window's area of the screen and optionally reads its text.

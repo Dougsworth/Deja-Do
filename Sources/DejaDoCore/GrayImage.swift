@@ -160,6 +160,17 @@ public struct GrayImage: Equatable {
         return sat
     }
 
+    /// Share of pixels that changed noticeably, after bringing the other image to
+    /// this size. A small change, like one digit in a calculator's display,
+    /// barely moves the average difference but shows up here.
+    public func changedFraction(from other: GrayImage, threshold: Int = 24) -> Double {
+        guard !isEmpty, !other.isEmpty else { return isEmpty == other.isEmpty ? 0 : 1 }
+        let o = (other.width == width && other.height == height) ? other : other.resized(width: width, height: height)
+        var n = 0
+        for i in 0..<pixels.count where abs(Int(pixels[i]) - Int(o.pixels[i])) > threshold { n += 1 }
+        return Double(n) / Double(pixels.count)
+    }
+
     /// Average difference per pixel from 0 (same) to 1 (inverted), after
     /// bringing the other image to this size. Used to tell whether a screen changed.
     public func difference(from other: GrayImage) -> Double {

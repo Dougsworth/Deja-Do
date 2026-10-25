@@ -312,7 +312,7 @@ final class Recorder: @unchecked Sendable {
         lastActionAt = Date()
         let gen = generation
         Task.detached(priority: .utility) { [weak self] in
-            try? await Task.sleep(nanoseconds: 350_000_000)
+            try? await Task.sleep(nanoseconds: 250_000_000)
             guard let me = self else { return }
             let go = await MainActor.run { me.isRecording && me.generation == gen }
             if go { await me.readScreen() }

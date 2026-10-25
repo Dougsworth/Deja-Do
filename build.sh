@@ -5,6 +5,7 @@
 #        ./build.sh test     run the engine's unit tests
 #        ./build.sh release  sign with Developer ID, notarize, and zip it to send to people
 #        ./build.sh selftest build, install, then drive Calculator end to end (results in self-test.txt)
+#        ./build.sh watch    wait for a .selftest-request file, then run the self test; repeats until Ctrl+C
 #
 # Release needs the paid Apple Developer Program, a "Developer ID Application"
 # certificate (Xcode › Settings › Accounts › Manage Certificates › +), and the
@@ -13,6 +14,22 @@
 #     --apple-id YOUR_APPLE_ID --team-id YOUR_TEAM_ID --password APP_SPECIFIC_PASSWORD
 set -euo pipefail
 cd "$(dirname "$0")"
+
+if [ "${1:-}" = "watch" ]; then
+  # Lets someone working on the code remotely ask for a build and self test by
+  # creating .selftest-request in this folder. Output goes to build.log.
+  echo "Waiting for test requests. Leave this window open, and the mouse alone while a test runs. Ctrl+C stops."
+  while true; do
+    if [ -f .selftest-request ]; then
+      rm -f .selftest-request .selftest-done
+      echo "$(date '+%H:%M:%S') building and running the self test"
+      if ./build.sh selftest > build.log 2>&1; then RESULT=passed; else RESULT=failed; fi
+      echo "$(date '+%H:%M:%S') $RESULT"
+      echo "$RESULT" > .selftest-done
+    fi
+    sleep 2
+  done
+fi
 
 if [ "${1:-}" = "test" ]; then
   swift test

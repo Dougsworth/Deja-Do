@@ -7,3 +7,5 @@ xcuserdata/
 build.log
 .rebuild
 self-test.txt
+.selftest-request
+.selftest-done

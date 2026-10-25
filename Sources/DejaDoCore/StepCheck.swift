@@ -189,7 +189,7 @@ public struct StepExpectation: Codable, Equatable {
 
         let pixelsChanged: Bool = {
             guard let x = before.thumbnail, let y = after.thumbnail else { return false }
-            return x.difference(from: y) > 0.015
+            return x.changedFraction(from: y) > StepVerifier.pixelChange
         }()
         let textsChanged = beforeCounts != afterCounts
         let changed = textsChanged || pixelsChanged || title != nil || app != nil
@@ -267,6 +267,10 @@ public struct StepCheckResult: Equatable {
 }
 
 public enum StepVerifier {
+    /// Share of thumbnail pixels that must change to count as "the screen changed".
+    /// At 128 × 80 that is about 20 pixels, enough for one changed digit.
+    public static let pixelChange = 0.002
+
     /// Compares the screen after a step with what the recording expects.
     /// - Parameter before: the screen just before the step, if read. It lets
     ///   the check tell text that newly appeared from text that was already there.
@@ -367,7 +371,7 @@ public enum StepVerifier {
         guard a.bundleID == b.bundleID,
               TextSimilarity.normalize(a.windowTitle ?? "") == TextSimilarity.normalize(b.windowTitle ?? ""),
               StepExpectation.counts(a.texts) == StepExpectation.counts(b.texts) else { return false }
-        if let x = a.thumbnail, let y = b.thumbnail { return x.difference(from: y) <= 0.01 }
+        if let x = a.thumbnail, let y = b.thumbnail { return x.changedFraction(from: y) <= pixelChange }
         return true
     }
 

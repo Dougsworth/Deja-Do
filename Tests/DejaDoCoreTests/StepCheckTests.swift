@@ -271,3 +271,24 @@ final class StepCheckStorageTests: XCTestCase {
         XCTAssertEqual(step.kind, .wait(seconds: 1))
     }
 }
+
+final class PixelChangeTests: XCTestCase {
+    func testOneDigitChangingCounts() {
+        // A 128 × 80 thumbnail where only a 5 × 6 patch changed, like one digit.
+        let before = GrayImage(width: 128, height: 80, fill: 230)
+        var after = before
+        for y in 10..<16 { for x in 100..<105 { after[x, y] = 20 } }
+        XCTAssertLessThan(before.difference(from: after), 0.003, "the average barely moves")
+        XCTAssertGreaterThan(before.changedFraction(from: after), StepVerifier.pixelChange)
+        let a = ScreenState(thumbnail: before), b = ScreenState(thumbnail: after)
+        XCTAssertTrue(StepExpectation.derive(before: a, after: b).changed)
+        XCTAssertFalse(StepVerifier.unchanged(a, b))
+    }
+
+    func testFaintNoiseDoesNot() {
+        let before = GrayImage(width: 128, height: 80, fill: 230)
+        var after = before
+        for i in stride(from: 0, to: after.pixels.count, by: 3) { after.pixels[i] = 238 }
+        XCTAssertEqual(before.changedFraction(from: after), 0)
+    }
+}
