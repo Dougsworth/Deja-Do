@@ -294,7 +294,7 @@ public struct MatchEngine {
         var fits: [AnchorFit] = []
         for a in anchors {
             let was = CGPoint(x: tc.x + a.offset.x, y: tc.y + a.offset.y)
-            var best: (CGPoint, Double)?
+            var best: (CGPoint, CGFloat)?
             for c in candidates {
                 guard let cc = c.center,
                       roleCompatibility(a.role, c.role) > 0,
@@ -302,7 +302,7 @@ public struct MatchEngine {
                 let d = hypot(cc.x - was.x, cc.y - was.y)
                 if d < (best?.1 ?? .infinity) { best = (cc, d) }
             }
-            if let (now, _) = best {
+            if let now = best?.0 {
                 fits.append(AnchorFit(anchor: a, now: now, displacement: CGVector(dx: now.x - was.x, dy: now.y - was.y)))
             }
         }
