@@ -11,7 +11,11 @@ You need Xcode or the Xcode command line tools (`xcode-select --install`).
 ```bash
 ./build.sh run     # build "Deja Do.app" and open it
 ./build.sh test    # run the matching engine's tests
+./build.sh selftest   # drive Calculator end to end with real clicks (results in self-test.txt)
+./build.sh release    # sign with Developer ID, notarize, and zip it to send to people
 ```
+
+The self test records 7 + 8 = in Calculator, replays it, replays it in the Scientific layout, checks that a step whose screen doesn't match stops the run without repeating itself, and, with Screen Recording on, replays from the screen alone after the window moves. Keep hands off the mouse for about a minute while it runs. `./build.sh watch` waits for a `.selftest-request` file in the folder and runs the self test each time one appears, so changes can be tested without anyone at the keyboard.
 
 Look for the ↻ icon in the menu bar. You can also open `Package.swift` in Xcode to edit and debug.
 
