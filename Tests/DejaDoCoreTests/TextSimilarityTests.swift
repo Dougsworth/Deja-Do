@@ -69,3 +69,13 @@ final class TextSimilarityTests: XCTestCase {
         XCTAssertNil(TextSimilarity.similarity("  ", "+"), "blank is still no text")
     }
 }
+
+final class WindowTitleTests: XCTestCase {
+    func testTitlesDifferingOnlyByNumberAreTheSameKind() {
+        XCTAssertTrue(WindowTitles.sameKind("Untitled 2", "Untitled"))
+        XCTAssertTrue(WindowTitles.sameKind("Invoice 1043", "Invoice 1042"))
+        XCTAssertTrue(WindowTitles.sameKind("Report.pdf", "Report.pdf"))
+        XCTAssertFalse(WindowTitles.sameKind("Inbox", "Sent"))
+        XCTAssertFalse(WindowTitles.sameKind("12", "34"), "nothing but numbers is not a title")
+    }
+}

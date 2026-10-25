@@ -44,12 +44,20 @@ enum ElementFinder {
         let windows = AX.elements(AX.raw(appElement, kAXWindowsAttribute))
         let focused = AX.element(appElement, kAXFocusedWindowAttribute)
         var chosen: AXUIElement?
-        if let title = l.windowTitle {
-            chosen = windows.first { AX.string($0, kAXTitleAttribute) == title }
-        }
-        chosen = chosen ?? focused ?? windows.first
+        chosen = pick(recorded: l.windowTitle, focused: focused, windows: windows)
         guard let window = chosen else { return nil }
         return Root(element: window, windowFrame: AX.frame(window))
+    }
+
+    /// The window a step means. The front window wins when its title is the
+    /// recorded one give or take a number ("Untitled 2" for "Untitled",
+    /// "Invoice 1043" for "Invoice 1042"): that's the same kind of window, and
+    /// the one the person is looking at. Otherwise a window with exactly the
+    /// recorded title, else the front one.
+    static func pick(recorded: String?, focused: AXUIElement?, windows: [AXUIElement]) -> AXUIElement? {
+        guard let recorded else { return focused ?? windows.first }
+        if let f = focused, let t = AX.string(f, kAXTitleAttribute), WindowTitles.sameKind(t, recorded) { return f }
+        return windows.first { AX.string($0, kAXTitleAttribute) == recorded } ?? focused ?? windows.first
     }
 
     /// Tries the exact recorded route first. If the element there still

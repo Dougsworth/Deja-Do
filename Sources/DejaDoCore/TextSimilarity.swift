@@ -163,3 +163,16 @@ public enum TextSimilarity {
         return true
     }
 }
+
+/// Comparing window titles across runs.
+public enum WindowTitles {
+    /// Same title once numbers are set aside: "Untitled" and "Untitled 2",
+    /// "Invoice 1042" and "Invoice 1043". Titles with no words left don't count.
+    public static func sameKind(_ a: String, _ b: String) -> Bool {
+        let x = TextSimilarity.normalize(a), y = TextSimilarity.normalize(b)
+        if x == y { return true }
+        let dx = TextSimilarity.withoutDigits(x).trimmingCharacters(in: .whitespaces)
+        let dy = TextSimilarity.withoutDigits(y).trimmingCharacters(in: .whitespaces)
+        return !dx.isEmpty && dx == dy
+    }
+}
