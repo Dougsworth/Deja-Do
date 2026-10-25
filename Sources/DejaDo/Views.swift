@@ -975,8 +975,19 @@ struct SettingsView: View {
 
             Divider()
 
-            field("Model", note: nil) {
-                TextField(AppModel.defaultModel, text: $model.model)
+            field("Model", note: AppModel.models.first { $0.id == model.model }?.note) {
+                Picker("Model", selection: $model.model) {
+                    ForEach(AppModel.models, id: \.id) { m in
+                        Text(m.name).tag(m.id)
+                    }
+                    // Keeps a model typed in by an older version selectable.
+                    if !AppModel.models.contains(where: { $0.id == model.model }) {
+                        Text(model.model).tag(model.model)
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .fixedSize()
             }
             .disabled(!model.aiEnabled)
             .opacity(model.aiEnabled ? 1 : 0.5)

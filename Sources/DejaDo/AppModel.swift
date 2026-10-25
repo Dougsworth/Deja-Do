@@ -60,10 +60,18 @@ final class AppModel: ObservableObject, @unchecked Sendable {
 
     static let defaultModel = "claude-sonnet-5-5"
 
+    /// The models offered in Settings, fastest first.
+    static let models: [(id: String, name: String, note: String)] = [
+        ("claude-haiku-5-5", "Claude Haiku 5.5", "Fastest and cheapest. Fine for most fixes."),
+        ("claude-sonnet-5-5", "Claude Sonnet 5.5", "A good balance of speed and judgement. The default."),
+        ("claude-opus-5-5", "Claude Opus 5.5", "Most careful, slowest and most expensive.")
+    ]
+
     init() {
         let defaults = UserDefaults.standard
         aiEnabled = defaults.object(forKey: "aiEnabled") as? Bool ?? true
-        model = defaults.string(forKey: "model") ?? Self.defaultModel
+        let saved = defaults.string(forKey: "model")?.trimmingCharacters(in: .whitespaces) ?? ""
+        model = saved.isEmpty ? Self.defaultModel : saved
         apiKey = Keychain.get("anthropic") ?? ""
         useVision = defaults.object(forKey: "useVision") as? Bool ?? true
         checkSteps = defaults.object(forKey: "checkSteps") as? Bool ?? true
