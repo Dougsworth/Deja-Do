@@ -51,10 +51,17 @@ enum AppsSelfTest {
             guard let id = app.bundleIdentifier else { continue }
             let el = AXUIElementCreateApplication(app.processIdentifier)
             AXUIElementSetMessagingTimeout(el, 1.0)
-            AX.wake(app: el, bundleID: id)
+            let manual = AXUIElementSetAttributeValue(el, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+            let enhanced = AXUIElementSetAttributeValue(el, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
             var labelled = 0, total = 0
-            let deadline = Date().addingTimeInterval(6)
+            var activated = false
+            let deadline = Date().addingTimeInterval(9)
             repeat {
+                // Halfway, bring it to the front once: some builds only fill the tree for a visible window.
+                if !activated, Date() > deadline.addingTimeInterval(-4.5) {
+                    activated = true
+                    app.activate(options: [.activateIgnoringOtherApps])
+                }
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 // Every window, since the focused one may be a tiny status popover.
                 total = 0; labelled = 0
@@ -67,7 +74,19 @@ enum AppsSelfTest {
             } while Date() < deadline
             let good = labelled >= 5
             anyGood = anyGood || good
-            results.append("\(app.localizedName ?? id) \(labelled) of \(total) named\(good ? "" : " ✗")")
+            var why = ""
+            if !good {
+                // What's actually there, to tell "tree never built" from "built but unlabelled".
+                let ws = AX.elements(AX.raw(el, kAXWindowsAttribute))
+                let shape = ws.prefix(2).map { w -> String in
+                    let mini = (AX.raw(w, kAXMinimizedAttribute) as? Bool) == true ? " minimised" : ""
+                    let kids = AX.children(w).map { AX.role($0) }
+                    let deeper = AX.children(w).flatMap { AX.children($0) }.prefix(8).map { AX.role($0) }
+                    return "[\(kids.joined(separator: ","))\(deeper.isEmpty ? "" : " > " + deeper.joined(separator: ","))\(mini)]"
+                }.joined(separator: " ")
+                why = " (manual \(manual.rawValue), enhanced \(enhanced.rawValue), \(shape))"
+            }
+            results.append("\(app.localizedName ?? id) \(labelled) of \(total) named\(good ? "" : " ✗")\(why)")
         }
         log.check("An Electron app describes its buttons once asked", anyGood, results.joined(separator: " · "))
     }
