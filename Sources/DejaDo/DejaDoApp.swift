@@ -1,6 +1,6 @@
 import SwiftUI
 import AppKit
-import DejaDoCore
+@preconcurrency import DejaDoCore
 
 /// Opens .dejado files double-clicked in Finder or dropped on the app.
 final class AppDelegate: NSObject, NSApplicationDelegate {

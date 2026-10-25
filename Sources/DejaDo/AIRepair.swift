@@ -1,6 +1,6 @@
 import Foundation
 import CoreGraphics
-import DejaDoCore
+@preconcurrency import DejaDoCore
 
 /// When the engine isn't sure, ask an AI model which element the user meant.
 /// Only a text list of the window's elements is sent, never a screenshot

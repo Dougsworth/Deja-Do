@@ -9,7 +9,16 @@ import Foundation
 /// a different button does not.
 public enum TextSimilarity {
     /// Lowercase, strip accents and punctuation, collapse whitespace.
+    /// A label made only of symbols ("+", "=", "…") keeps its symbols, since
+    /// they are the whole label, rather than collapsing to nothing.
     public static func normalize(_ s: String) -> String {
+        let words = normalizeWords(s)
+        if !words.isEmpty { return words }
+        return s.folding(options: [.caseInsensitive, .widthInsensitive], locale: nil)
+            .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
+    private static func normalizeWords(_ s: String) -> String {
         let folded = s.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
         var out = ""
         out.reserveCapacity(folded.count)
@@ -91,6 +100,11 @@ public enum TextSimilarity {
         guard let a, let b else { return nil }
         let na = normalize(a), nb = normalize(b)
         guard !na.isEmpty, !nb.isEmpty else { return nil }
+        // A symbol only label ("+", "…") only compares with another one; against
+        // words it says nothing either way.
+        let symbolsA = normalizeWords(a).isEmpty, symbolsB = normalizeWords(b).isEmpty
+        if symbolsA != symbolsB { return nil }
+        if symbolsA { return na == nb ? 1 : 0 }
         if na == nb { return 1 }
 
         let da = withoutDigits(na), db = withoutDigits(nb)

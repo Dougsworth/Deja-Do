@@ -1,6 +1,6 @@
 import SwiftUI
 import AppKit
-import DejaDoCore
+@preconcurrency import DejaDoCore
 
 // Built from type, whitespace and hairlines. One accent colour marks what is
 // active; green and red only ever mean a run passed or failed.

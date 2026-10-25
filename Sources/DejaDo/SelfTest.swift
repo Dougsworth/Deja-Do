@@ -1,6 +1,6 @@
 import AppKit
 import ApplicationServices
-import DejaDoCore
+@preconcurrency import DejaDoCore
 
 /// End to end checks on a real app, run with:
 ///
@@ -218,10 +218,12 @@ enum SelfTest {
     @discardableResult
     static func press(_ labels: [String]) async -> Bool {
         guard let w = window() else { return false }
-        let wanted = Set(labels.map(TextSimilarity.normalize))
+        // Symbols like + and = must match exactly, so compare the raw text too.
+        func key(_ s: String) -> String { s.trimmingCharacters(in: .whitespaces).lowercased() }
+        let wanted = Set(labels.map(key))
         let buttons = AX.collect(from: w, origin: nil, limit: 800) { $0 == "AXButton" }
         let hit = buttons.first { f in
-            [f.node.label, f.node.title, f.node.desc].contains { $0.map { wanted.contains(TextSimilarity.normalize($0)) } ?? false }
+            [f.node.label, f.node.title, f.node.desc].contains { $0.map { wanted.contains(key($0)) } ?? false }
         }
         guard let frame = hit?.node.frame else { return false }
         Input.click(at: CGPoint(x: frame.midX, y: frame.midY), button: .left, count: 1, modifiers: 0)

@@ -1,10 +1,11 @@
 import AppKit
 import CoreGraphics
-import DejaDoCore
+@preconcurrency import DejaDoCore
 
 /// Watches clicks, typing and app switches and turns them into steps.
 /// Everything runs on the main thread: the event tap is attached to the main run loop.
-final class Recorder {
+/// Screen reads run in the background and hand their results back on the main thread.
+final class Recorder: @unchecked Sendable {
     private(set) var steps: [Step] = []
     private(set) var pendingText = ""
     private(set) var isRecording = false
@@ -25,11 +26,17 @@ final class Recorder {
     private var inSecureField = false
     private let ownPID = ProcessInfo.processInfo.processIdentifier
 
-    // Screen reads happen off the main thread and land here later.
-    private let work = DispatchGroup()
+    // The screen is read every half second while recording, and again shortly
+    // after each action. A step's "before" is the newest read that started
+    // after the previous action, so it shows the screen as it settled and never
+    // the step's own effect, which a read started at the click would race with.
     private var generation = 0
-    private var snapshots: [Int: ScreenState] = [:]
-    private var snapshotCount = 0
+    private var reads: [Int: (state: ScreenState, started: Date, finished: Date)] = [:]
+    /// Window pictures from recent reads, reused for the picture around a click.
+    private var pictures: [Int: (read: ScreenVision.WindowRead, frame: CGRect, pid: pid_t)] = [:]
+    private var readCount = 0
+    private var inFlight = 0
+    private var lastActionAt = Date.distantPast
     /// A click or key step waiting for its "after" read: the read taken at the next action.
     private var pendingCheck: (stepID: UUID, before: Int)?
     private var checkPairs: [(stepID: UUID, before: Int, after: Int)] = []
@@ -43,8 +50,11 @@ final class Recorder {
         lastBundleID = nil
         inSecureField = false
         generation += 1
-        snapshots = [:]
-        snapshotCount = 0
+        reads = [:]
+        pictures = [:]
+        readCount = 0
+        inFlight = 0
+        lastActionAt = .distantPast
         pendingCheck = nil
         checkPairs = []
         lastExternalPID = nil
@@ -79,6 +89,7 @@ final class Recorder {
             AX.wake(pid: front.processIdentifier, bundleID: front.bundleIdentifier ?? "")
         }
         isRecording = true
+        watchScreen()
         onChange?()
         return true
     }
@@ -88,16 +99,23 @@ final class Recorder {
     func finish(_ completion: @escaping ([Step]) -> Void) {
         guard isRecording else { completion(steps); return }
         flushText()
-        // The screen as it was left is the last step's "after".
-        closePendingCheck(at: snapshot())
         stop()
-        let group = work, gen = generation
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            _ = group.wait(timeout: .now() + 4)
-            DispatchQueue.main.async {
-                guard let self, self.generation == gen else { return }
-                self.applyExpectations()
-                completion(self.steps)
+        let gen = generation
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let me = self else { return }
+            // The screen as it was left is the last step's "after".
+            await me.readScreen(force: true)
+            let deadline = Date().addingTimeInterval(4)
+            while Date() < deadline {
+                let busy = await MainActor.run { me.inFlight > 0 }
+                if !busy { break }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            await MainActor.run {
+                guard me.generation == gen else { return }
+                me.closePendingCheck(at: me.latestReadSinceLastAction())
+                me.applyExpectations()
+                completion(me.steps)
             }
         }
     }
@@ -141,12 +159,15 @@ final class Recorder {
         let point = event.location
         let clickState = Int(event.getIntegerValueField(.mouseEventClickState))
         if AX.isOwn(at: point) { return }
-        // Start reading the screen before anything else, while it still shows
-        // the previous step's result: most apps react when the button comes back up.
+        // The newest read since the last action shows the screen just before this click.
         // The second half of a double click is part of the same step, so it isn't a boundary.
         let shot = clickState >= 2 ? nil : snapshot()
         let stepID = UUID()
-        if visionEnabled, clickState < 2 { recordVisual(stepID: stepID, at: point) }
+        // The picture around the click: from that read when the window hasn't moved,
+        // otherwise captured right now.
+        let window = AX.windowFrame(at: point)
+        let picture = visionEnabled && clickState < 2 ? cachedPicture(shot, window: window) : nil
+        if visionEnabled, clickState < 2, picture == nil { recordVisual(stepID: stepID, at: point) }
         // If the app won't describe what was clicked, keep the click anyway as a
         // position inside its window rather than silently losing a step.
         guard let capture = AX.capture(at: point) ?? AX.positionCapture(at: point) else { return }
@@ -171,6 +192,11 @@ final class Recorder {
         let step = Step(id: stepID, kind: .click(target: target, button: button, count: 1, modifiers: mods))
         steps.append(step)
         if !capture.isSecureField, let shot { pendingCheck = (step.id, shot) }
+        if let picture, let window, !target.inMenu {
+            attach(VisualTarget.make(window: picture.image, lines: picture.lines,
+                                     click: CGPoint(x: point.x - window.minX, y: point.y - window.minY),
+                                     windowSize: window.size), to: stepID)
+        }
         if capture.isSecureField {
             // Never record passwords. Ask for it when the automation runs instead.
             steps.append(Step(kind: .type(text: "", askEachRun: true, secret: true,
@@ -229,32 +255,91 @@ final class Recorder {
 
     // MARK: Screen reads
 
-    /// Starts reading the front window in the background and returns the
-    /// read's number. Returns nil when step checking is off.
-    private func snapshot() -> Int? {
-        guard checkSteps else { return nil }
-        if let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier != ownPID {
-            lastExternalPID = front.processIdentifier
-        }
-        guard let pid = lastExternalPID else { return nil }
-        let index = snapshotCount
-        snapshotCount += 1
-        let vision = visionEnabled, gen = generation
-        work.enter()
-        Task.detached(priority: .userInitiated) { [weak self] in
-            let state = await ScreenStateReader.read(pid: pid, ocr: vision, pixels: vision)
-            DispatchQueue.main.async {
-                if let self, self.generation == gen { self.snapshots[index] = state }
-                self?.work.leave()
+    /// Reads the screen every half second while recording.
+    private func watchScreen() {
+        guard checkSteps || visionEnabled else { return }
+        let gen = generation
+        Task.detached(priority: .utility) { [weak self] in
+            while true {
+                guard let me = self else { return }
+                let go = await MainActor.run { me.isRecording && me.generation == gen }
+                guard go else { return }
+                await me.readScreen()
+                try? await Task.sleep(nanoseconds: 450_000_000)
             }
         }
-        return index
+    }
+
+    /// One read of the front window, stored when it finishes.
+    private func readScreen(force: Bool = false) async {
+        let ticket: (id: Int, pid: pid_t, vision: Bool, gen: Int)? = await MainActor.run {
+            guard force || self.isRecording else { return nil }
+            if let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier != self.ownPID {
+                self.lastExternalPID = front.processIdentifier
+            }
+            guard let pid = self.lastExternalPID else { return nil }
+            let id = self.readCount
+            self.readCount += 1
+            self.inFlight += 1
+            return (id, pid, self.visionEnabled, self.generation)
+        }
+        guard let ticket else { return }
+        let started = Date()
+        let full = await ScreenStateReader.readFull(pid: ticket.pid, ocr: ticket.vision, pixels: ticket.vision)
+        let finished = Date()
+        await MainActor.run {
+            self.inFlight -= 1
+            guard self.generation == ticket.gen else { return }
+            self.reads[ticket.id] = (full.state, started, finished)
+            if let picture = full.window, let frame = full.windowFrame {
+                self.pictures[ticket.id] = (picture, frame, ticket.pid)
+                // Pictures are big; only the last few are ever useful.
+                for old in self.pictures.keys where old < ticket.id - 4 { self.pictures[old] = nil }
+            }
+        }
+    }
+
+    /// The newest finished read that started after the last action, if any.
+    private func latestReadSinceLastAction() -> Int? {
+        reads.filter { $0.value.started > lastActionAt }.max { $0.value.finished < $1.value.finished }?.key
+    }
+
+    /// Marks an action: returns the read showing the screen just before it,
+    /// and asks for a fresh read once the action has had a moment to land.
+    private func snapshot() -> Int? {
+        guard checkSteps || visionEnabled else { return nil }
+        let before = latestReadSinceLastAction()
+        lastActionAt = Date()
+        let gen = generation
+        Task.detached(priority: .utility) { [weak self] in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard let me = self else { return }
+            let go = await MainActor.run { me.isRecording && me.generation == gen }
+            if go { await me.readScreen() }
+        }
+        return before
     }
 
     private func closePendingCheck(at after: Int?) {
         defer { pendingCheck = nil }
-        guard let p = pendingCheck, let after else { return }
+        guard let p = pendingCheck, let after, after != p.before else { return }
         checkPairs.append((p.stepID, p.before, after))
+    }
+
+    /// The window picture from a read, if that read was of the window clicked in and it hasn't moved since.
+    private func cachedPicture(_ id: Int?, window: CGRect?) -> ScreenVision.WindowRead? {
+        guard let id, let window, let p = pictures[id],
+              abs(p.frame.minX - window.minX) < 1, abs(p.frame.minY - window.minY) < 1,
+              abs(p.frame.width - window.width) < 1, abs(p.frame.height - window.height) < 1 else { return nil }
+        return p.read
+    }
+
+    private func attach(_ visual: VisualTarget, to stepID: UUID) {
+        guard let i = steps.firstIndex(where: { $0.id == stepID }),
+              case .click(var t, let b, let c, let m) = steps[i].kind, !t.inMenu else { return }
+        t.visual = visual
+        steps[i].kind = .click(target: t, button: b, count: c, modifiers: m)
+        onChange?()
     }
 
     /// Captures the window around a click and reads its text, then attaches
@@ -262,22 +347,19 @@ final class Recorder {
     private func recordVisual(stepID: UUID, at point: CGPoint) {
         guard let wf = AX.windowFrame(at: point) else { return }
         let gen = generation
-        work.enter()
+        inFlight += 1
         Task.detached(priority: .userInitiated) { [weak self] in
             let read = await ScreenVision.read(windowFrame: wf, ocr: true)
             let visual = read.map {
                 VisualTarget.make(window: $0.image, lines: $0.lines,
                                   click: CGPoint(x: point.x - wf.minX, y: point.y - wf.minY), windowSize: wf.size)
             }
-            DispatchQueue.main.async {
-                defer { self?.work.leave() }
+            guard let me = self else { return }
+            await MainActor.run {
+                me.inFlight -= 1
                 // The step may not exist: the click was on Deja Do, or it joined a double click.
-                guard let self, self.generation == gen, let visual,
-                      let i = self.steps.firstIndex(where: { $0.id == stepID }),
-                      case .click(var t, let b, let c, let m) = self.steps[i].kind, !t.inMenu else { return }
-                t.visual = visual
-                self.steps[i].kind = .click(target: t, button: b, count: c, modifiers: m)
-                self.onChange?()
+                guard me.generation == gen, let visual else { return }
+                me.attach(visual, to: stepID)
             }
         }
     }
@@ -289,7 +371,7 @@ final class Recorder {
             return nil
         }
         for pair in checkPairs {
-            guard let before = snapshots[pair.before], let after = snapshots[pair.after],
+            guard let before = reads[pair.before]?.state, let after = reads[pair.after]?.state,
                   let i = steps.firstIndex(where: { $0.id == pair.stepID }) else { continue }
             let e = StepExpectation.derive(before: before, after: after, typed: typed)
             // Nothing changed when recording, so there is nothing to confirm on a run.

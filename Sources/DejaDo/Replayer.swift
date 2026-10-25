@@ -1,6 +1,6 @@
 import AppKit
 import ApplicationServices
-import DejaDoCore
+@preconcurrency import DejaDoCore
 
 /// Plays an automation back. Runs off the main thread; reports through callbacks.
 final class Replayer {

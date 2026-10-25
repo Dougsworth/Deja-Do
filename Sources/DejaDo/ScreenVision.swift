@@ -2,7 +2,7 @@ import AppKit
 import ApplicationServices
 import ScreenCaptureKit
 import Vision
-import DejaDoCore
+@preconcurrency import DejaDoCore
 
 /// Looks at the screen itself: grabs a window's pixels with ScreenCaptureKit
 /// and reads its text with Apple's Vision framework. Used for apps that don't
@@ -127,10 +127,22 @@ enum ScreenStateReader {
     ///   - ocr: also read the text in the pixels, for apps that don't describe themselves.
     ///   - pixels: grab a tiny thumbnail to tell whether anything changed.
     static func read(pid: pid_t?, ocr: Bool, pixels: Bool) async -> ScreenState {
+        await readFull(pid: pid, ocr: ocr, pixels: pixels).state
+    }
+
+    /// A read plus the window picture it came from, which the recorder reuses
+    /// for the picture around a click so it shows the screen before the click.
+    struct Full {
+        var state: ScreenState
+        var window: ScreenVision.WindowRead?
+        var windowFrame: CGRect?
+    }
+
+    static func readFull(pid: pid_t?, ocr: Bool, pixels: Bool) async -> Full {
         let me = ProcessInfo.processInfo.processIdentifier
         guard let app = pid.flatMap({ NSRunningApplication(processIdentifier: $0) })
                 ?? NSWorkspace.shared.frontmostApplication,
-              app.processIdentifier != me else { return ScreenState() }
+              app.processIdentifier != me else { return Full(state: ScreenState()) }
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(appElement, 0.5)
         let window = AX.element(appElement, kAXFocusedWindowAttribute)
@@ -150,10 +162,12 @@ enum ScreenStateReader {
                 state.texts.append(SeenText(label, frame: f.snapshot.frame))
             }
         }
+        var picture: ScreenVision.WindowRead?
         if (ocr || pixels), let wf, let read = await ScreenVision.read(windowFrame: wf, ocr: ocr) {
             if ocr { state.merge(ocr: read.lines) }
             if pixels { state.thumbnail = read.thumbnail }
+            picture = read
         }
-        return state
+        return Full(state: state, window: picture, windowFrame: wf)
     }
 }

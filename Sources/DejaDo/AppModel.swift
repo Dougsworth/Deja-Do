@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
-import DejaDoCore
+@preconcurrency import DejaDoCore
 
 /// App state shared by the menu bar and the main window. Only touched on the
 /// main thread, which is why it can be marked as safe to hand across tasks.
@@ -149,11 +149,12 @@ final class AppModel: ObservableObject, @unchecked Sendable {
                     found = AIRequest.ollamaModels(from: reply.0)
                 }
             }
+            let models = found, ok = reachable
+            guard let me = self else { return }
             await MainActor.run {
-                guard let self else { return }
-                self.ollamaModels = found
-                self.ollamaReachable = reachable
-                if self.aiProvider == .ollama, self.model.isEmpty, let first = found.first { self.model = first }
+                me.ollamaModels = models
+                me.ollamaReachable = ok
+                if me.aiProvider == .ollama, me.model.isEmpty, let first = models.first { me.model = first }
             }
         }
     }

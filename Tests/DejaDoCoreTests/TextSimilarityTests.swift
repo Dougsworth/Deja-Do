@@ -50,4 +50,13 @@ final class TextSimilarityTests: XCTestCase {
         XCTAssertTrue(TextSimilarity.isStableIdentifier("saveButton"))
         XCTAssertTrue(TextSimilarity.isStableIdentifier("toolbar.export"))
     }
+
+    func testSymbolLabelsAreTheirOwnText() {
+        // Calculator style buttons: the symbol is the whole label.
+        XCTAssertEqual(TextSimilarity.normalize("+"), "+")
+        XCTAssertEqual(TextSimilarity.similarity("=", "="), 1)
+        XCTAssertLessThan(TextSimilarity.similarity("+", "=") ?? 1, 0.5)
+        XCTAssertEqual(TextSimilarity.normalize("Save…"), "save", "words still drop their punctuation")
+        XCTAssertNil(TextSimilarity.similarity("  ", "+"), "blank is still no text")
+    }
 }
