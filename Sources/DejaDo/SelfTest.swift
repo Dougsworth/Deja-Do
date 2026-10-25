@@ -272,6 +272,8 @@ enum SelfTest {
         do {
             try await replayer.run(a, settings: settings, callbacks: callbacks)
             return (nil, collected.summary)
+        } catch let stop as ReplayStop {
+            return ("\(stop.message) \(stop.outcome.advice)", collected.summary)
         } catch {
             return (error.localizedDescription, collected.summary)
         }

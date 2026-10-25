@@ -58,6 +58,8 @@ final class Replayer: @unchecked Sendable {
     /// The app the current step is meant for. Input is only sent while it's in front.
     private var expectedApp: (bundleID: String, name: String)?
     private var goal: String?
+    /// The closest the screen search came, for explaining why it didn't click.
+    private var lastVisualMiss: String?
 
     /// Runs the task. Throws `ReplayStop` saying where it stopped and whether a
     /// step that sends, saves or deletes had already run.
@@ -164,7 +166,7 @@ final class Replayer: @unchecked Sendable {
                 try await ensureFront()
                 try await clickPosition(target, button: button, count: count, modifiers: modifiers)
                 note(i, target.visual != nil && settings.visionEnabled
-                     ? "Clicked by position: couldn't find it on screen with confidence"
+                     ? "Clicked by position: couldn't find it on screen with confidence\(lastVisualMiss.map { " (\($0))" } ?? "")"
                      : "Clicked by position: the app didn't say what was here when recorded")
                 break
             }
@@ -339,6 +341,7 @@ final class Replayer: @unchecked Sendable {
         guard let visual = target.visual else { return nil }
         let deadline = Date().addingTimeInterval(timeout)
         let matcher = VisualMatcher()
+        lastVisualMiss = nil
         repeat {
             if isCancelled { return nil }
             await settle(bundleID: target.bundleID, maxWait: 1.0)
@@ -350,6 +353,13 @@ final class Replayer: @unchecked Sendable {
                         .map { "\($0.key.rawValue) \(Int(($0.value * 100).rounded()))" }.joined(separator: ", ")
                     note(stepIndex, "Found on screen \(Self.describe(best, visual)) · \(Int((best.score * 100).rounded()))% match (\(evidence))")
                     return CGPoint(x: wf.minX + best.point.x, y: wf.minY + best.point.y)
+                }
+                if let best = report.best {
+                    let evidence = best.parts.sorted { $0.key.rawValue < $1.key.rawValue }
+                        .map { "\($0.key.rawValue) \(Int(($0.value * 100).rounded()))" }.joined(separator: ", ")
+                    lastVisualMiss = "closest \(Int((best.score * 100).rounded()))% (\(evidence)), \(report.candidates.count) spots, \(read.lines.count) lines of text read"
+                } else {
+                    lastVisualMiss = "nothing looked like it, \(read.lines.count) lines of text read"
                 }
             }
             try? await pause(0.3)
