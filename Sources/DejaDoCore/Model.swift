@@ -32,6 +32,28 @@ public struct Anchor: Codable, Equatable {
 
 /// Everything we know about the element the user clicked, so we can find it
 /// again later even if the window moved or the layout shifted.
+/// Where on the web a control lives: the site, and the page within it.
+public struct WebIdentity: Codable, Equatable {
+    public var host: String
+    public var path: String
+
+    public init(host: String, path: String) {
+        self.host = host.lowercased()
+        self.path = path
+    }
+
+    public init?(url: URL) {
+        guard let h = url.host, !h.isEmpty else { return nil }
+        self.init(host: h, path: url.path)
+    }
+
+    /// Same site: the host, ignoring a leading www.
+    public func sameSite(as other: WebIdentity) -> Bool {
+        func bare(_ h: String) -> String { h.hasPrefix("www.") ? String(h.dropFirst(4)) : h }
+        return bare(host) == bare(other.host)
+    }
+}
+
 public struct ElementLocator: Codable, Equatable {
     public var bundleID: String
     public var appName: String
@@ -66,12 +88,15 @@ public struct ElementLocator: Codable, Equatable {
     /// fields above, but a repair is only accepted while it still matches this,
     /// so many small repairs can't drift the step onto a different button.
     public var original: OriginalIdentity?
+    /// For controls on a web page: which site and page they were on. A run
+    /// won't click a page on a different site, however similar it looks.
+    public var web: WebIdentity?
 
     public init(bundleID: String, appName: String, windowTitle: String?, role: String, subrole: String?,
                 title: String?, desc: String?, identifier: String?, help: String?, value: String?,
                 label: String?, path: [PathStep], frameInWindow: CGRect?, clickOffset: CGPoint,
                 inMenu: Bool, anchors: [Anchor]? = nil, context: [String]? = nil, windowSize: CGSize? = nil,
-                visual: VisualTarget? = nil) {
+                visual: VisualTarget? = nil, web: WebIdentity? = nil) {
         self.bundleID = bundleID
         self.appName = appName
         self.windowTitle = windowTitle
@@ -91,6 +116,7 @@ public struct ElementLocator: Codable, Equatable {
         self.context = context
         self.windowSize = windowSize
         self.visual = visual
+        self.web = web
     }
 
     public var hasText: Bool {

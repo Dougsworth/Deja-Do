@@ -484,6 +484,8 @@ final class Replayer: @unchecked Sendable {
                 if case .confident(let best) = o.report.decision {
                     return confident(o, best, target: target, stepIndex: stepIndex, risky: risky, callbacks: callbacks)
                 }
+                // Wrong website: keep waiting in case the page is still on its way, but never search it.
+                if o.wrongSite != nil { try await pause(0.4); continue }
             }
             // Not there yet: it may be scrolled out of view. Look through the list once.
             if !scrolled {
@@ -495,6 +497,11 @@ final class Replayer: @unchecked Sendable {
             try await pause(0.25)
         } while Date() < deadline
 
+        if let site = last?.wrongSite, let recorded = target.web {
+            callbacks.record(RepairRecord(app: target.bundleID, kind: .notFound, recorded: .init(target), accepted: false,
+                                          risky: risky, note: "browser on \(site), recorded on \(recorded.host)"))
+            throw ReplayError("\(target.appName) is showing \(site), but this step was recorded on \(recorded.host). Deja Do doesn't click on a different website.")
+        }
         // Before asking the AI, see whether the screen itself shows where it went.
         if settings.visionEnabled, target.visual != nil, !target.prefersVisual,
            let point = await locateVisually(target, stepIndex: stepIndex, timeout: 1.5) {

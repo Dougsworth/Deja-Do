@@ -91,10 +91,10 @@ final class TestServer: @unchecked Sendable {
         listener = nil
     }
 
-    func url(breaks: [Break]) -> URL {
+    func url(breaks: [Break], host: String = "127.0.0.1") -> URL {
         var c = URLComponents()
         c.scheme = "http"
-        c.host = "127.0.0.1"
+        c.host = host
         c.port = Int(port)
         c.path = "/form"
         if !breaks.isEmpty { c.queryItems = [URLQueryItem(name: "break", value: breaks.map(\.rawValue).joined(separator: ","))] }

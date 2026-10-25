@@ -28,6 +28,8 @@ enum WebSelfTest {
         let breaks: [TestServer.Break]
         let rule: Rule
         var popupRule = false
+        /// Serve the same page from this host instead, as if it were another website.
+        var host = "127.0.0.1"
     }
 
     static let scenarios: [Scenario] = [
@@ -44,6 +46,7 @@ enum WebSelfTest {
         Scenario(name: "Cookie banner, after being shown how to close it", breaks: [.banner], rule: .mustSubmit, popupRule: true),
         Scenario(name: "Submit now opens a confirm dialog", breaks: [.confirm], rule: .mustStop),
         Scenario(name: "Everything at once: moved, renamed, late, lookalike", breaks: [.move, .rename, .delay, .lookalike], rule: .submitOrStop),
+        Scenario(name: "Same form on a different website", breaks: [], rule: .mustStop, host: "localhost"),
     ]
 
     static func run(_ log: SelfTest.Log, vision: Bool) async -> Bool {
@@ -114,6 +117,10 @@ enum WebSelfTest {
             log.check("Submit is recognised as a risky step", risk.risk == .risky, risk.reason ?? "")
             log.check("Recorded what Submit changed", task.steps[i].expect.map { !$0.appeared.isEmpty } == true,
                       task.steps[i].expect?.summary ?? "nothing")
+            if case .click(let t, _, _, _) = task.steps[i].kind {
+                log.check("Knows which website and which DOM id Submit was", t.web?.host == "127.0.0.1" && t.identifier == "submit",
+                          "site \(t.web?.host ?? "none") path \(t.web?.path ?? "none"), id \(t.identifier ?? "none")")
+            }
         }
         guard acted, recorded.submits == 1, clicks.count == 3 else {
             log.line("      recording didn't come out right, skipping the replays")
@@ -123,7 +130,7 @@ enum WebSelfTest {
         // 2. Replay against each breakage.
         for scenario in scenarios {
             server.reset()
-            guard await open(server.url(breaks: scenario.breaks), waitForButton: !scenario.breaks.contains(.delay)) else {
+            guard await open(server.url(breaks: scenario.breaks, host: scenario.host), waitForButton: !scenario.breaks.contains(.delay)) else {
                 log.check(scenario.name, false, "the page didn't load")
                 continue
             }

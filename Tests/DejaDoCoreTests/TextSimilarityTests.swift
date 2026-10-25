@@ -49,6 +49,15 @@ final class TextSimilarityTests: XCTestCase {
         XCTAssertFalse(TextSimilarity.isStableIdentifier(nil))
         XCTAssertTrue(TextSimilarity.isStableIdentifier("saveButton"))
         XCTAssertTrue(TextSimilarity.isStableIdentifier("toolbar.export"))
+        // Web ids made up at load time.
+        XCTAssertFalse(TextSimilarity.isStableIdentifier("mui-12"))
+        XCTAssertFalse(TextSimilarity.isStableIdentifier(":r3:"))
+        XCTAssertFalse(TextSimilarity.isStableIdentifier("ember123"))
+        XCTAssertFalse(TextSimilarity.isStableIdentifier("field-12"))
+        XCTAssertFalse(TextSimilarity.isStableIdentifier("item_307"))
+        XCTAssertTrue(TextSimilarity.isStableIdentifier("submit"))
+        XCTAssertTrue(TextSimilarity.isStableIdentifier("email-field"))
+        XCTAssertTrue(TextSimilarity.isStableIdentifier("step-2"), "a single digit is usually a real name")
     }
 
     func testSymbolLabelsAreTheirOwnText() {

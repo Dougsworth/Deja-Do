@@ -137,9 +137,19 @@ public enum TextSimilarity {
 
     /// Generated identifiers (`_NS:123`, UUIDs, long hex or number runs) change
     /// on every launch, so matching on them does more harm than good.
+    /// Prefixes web frameworks put on ids they make up at load time.
+    static let generatedPrefixes = ["mui-", "ember", "react-", "radix-", "headlessui-", "downshift-", "rc_", "rc-", ":r", "ng-", "yui_", "ext-", "gwt-uid"]
+
     public static func isStableIdentifier(_ id: String?) -> Bool {
         guard let id, !id.isEmpty else { return false }
         if id.hasPrefix("_NS:") { return false }
+        let lower = id.lowercased()
+        if lower.contains(":") || generatedPrefixes.contains(where: { lower.hasPrefix($0) }) { return false }
+        // "field-12", "item_307": numbered at load time, different next time.
+        if let sep = lower.lastIndex(where: { $0 == "-" || $0 == "_" }) {
+            let tail = lower[lower.index(after: sep)...]
+            if tail.count >= 2, tail.allSatisfy(\.isNumber) { return false }
+        }
         var digitRun = 0, hexRun = 0, maxDigit = 0, maxHex = 0
         for ch in id {
             if ch.isNumber { digitRun += 1 } else { digitRun = 0 }

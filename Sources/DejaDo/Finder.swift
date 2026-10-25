@@ -22,6 +22,8 @@ enum ElementFinder {
         let report: MatchReport
         /// The window was too big or slow to scan completely.
         var truncated = false
+        /// The browser is showing a different site from the one recorded.
+        var wrongSite: String?
 
         func element(for c: RankedCandidate) -> AXUIElement { elements[c.index] }
         func snapshot(for c: RankedCandidate) -> ElementSnapshot { snapshots[c.index] }
@@ -55,6 +57,15 @@ enum ElementFinder {
     static func find(_ l: ElementLocator, engine: MatchEngine) -> Outcome? {
         guard let root = root(for: l) else { return nil }
         let origin = root.windowFrame?.origin
+
+        // A control recorded on one website is never clicked on another, however
+        // alike the pages look. A different page on the same site is fine: the
+        // same button is often on several of them.
+        if let recorded = l.web, let now = AX.webIdentity(inWindow: root.element), !recorded.sameSite(as: now) {
+            return Outcome(root: root, elements: [], snapshots: [],
+                           report: MatchReport(decision: .notFound([]), ranked: [], shift: nil, anchorsMatched: 0),
+                           wrongSite: now.host)
+        }
 
         if let el = AX.resolve(l.path, from: root.element) {
             let snap = AX.snapshot(AX.node(el), origin: origin, path: l.path, context: l.context ?? [])

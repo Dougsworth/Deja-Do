@@ -180,10 +180,14 @@ enum AX {
 
     // MARK: Nodes
 
+    /// Browsers hand out a page element's DOM id here (Safari and Chromium both do).
+    static let domIdentifierAttribute = "AXDOMIdentifier"
+    static let urlAttribute = "AXURL"
+
     static let nodeAttrs: [String] = [
         kAXRoleAttribute, kAXSubroleAttribute, kAXTitleAttribute, kAXDescriptionAttribute,
         kAXIdentifierAttribute, kAXHelpAttribute, kAXValueAttribute, kAXPositionAttribute,
-        kAXSizeAttribute, kAXChildrenAttribute
+        kAXSizeAttribute, kAXChildrenAttribute, domIdentifierAttribute
     ]
 
     static func node(_ el: AXUIElement) -> AXNode { node(el, attrs: fetch(el, nodeAttrs)) }
@@ -199,7 +203,8 @@ enum AX {
             subrole: string(a[kAXSubroleAttribute]),
             title: title,
             desc: desc,
-            identifier: string(a[kAXIdentifierAttribute]),
+            // A web page's own id for the element is as good as an app's identifier.
+            identifier: string(a[kAXIdentifierAttribute]) ?? string(a[domIdentifierAttribute]),
             help: string(a[kAXHelpAttribute]),
             value: value,
             label: title ?? desc ?? value ?? fallbackLabel(el, role: r, children: elements(a[kAXChildrenAttribute])),
@@ -519,7 +524,36 @@ enum AX {
             inMenu: inMenu,
             anchors: inMenu ? nil : Self.anchors(around: el, frame: n.frame, label: n.label, root: root),
             context: Self.context(of: el, stopAt: root),
-            windowSize: windowFrame?.size
+            windowSize: windowFrame?.size,
+            web: Self.webIdentity(of: el)
         )
+    }
+
+    // MARK: Web pages
+
+    /// The page an element belongs to, when it sits inside a browser's web area.
+    static func webIdentity(of el: AXUIElement) -> WebIdentity? {
+        var probe: AXUIElement? = el
+        for _ in 0..<40 {
+            guard let p = probe else { return nil }
+            if role(p) == "AXWebArea" { return url(of: p).flatMap(WebIdentity.init(url:)) }
+            probe = element(p, kAXParentAttribute)
+        }
+        return nil
+    }
+
+    static func url(of webArea: AXUIElement) -> URL? {
+        guard let v = raw(webArea, urlAttribute) else { return nil }
+        if CFGetTypeID(v) == CFURLGetTypeID() { return (v as! CFURL) as URL }
+        if let s = string(v) { return URL(string: s) }
+        return nil
+    }
+
+    /// The web page showing in a window right now, if it's a browser window.
+    static func webIdentity(inWindow window: AXUIElement) -> WebIdentity? {
+        let areas = collect(from: window, origin: nil, limit: 600) { $0 == "AXWebArea" }
+        // Several web areas (tabs, embedded frames): the biggest is the page.
+        let page = areas.max { ($0.node.frame?.width ?? 0) * ($0.node.frame?.height ?? 0) < ($1.node.frame?.width ?? 0) * ($1.node.frame?.height ?? 0) }
+        return page.flatMap { url(of: $0.element) }.flatMap(WebIdentity.init(url:))
     }
 }

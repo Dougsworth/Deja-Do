@@ -104,4 +104,15 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(Step(kind: .wait(seconds: 2)).summary, "Wait 2 seconds")
         XCTAssertEqual(Step(kind: .wait(seconds: 1.5)).summary, "Wait 1.5 seconds")
     }
+
+    func testWebIdentitySameSiteIgnoresWWW() {
+        let a = WebIdentity(url: URL(string: "https://www.Example.com/login")!)!
+        let b = WebIdentity(url: URL(string: "https://example.com/dashboard/settings")!)!
+        let c = WebIdentity(url: URL(string: "https://example.org/login")!)!
+        XCTAssertEqual(a.host, "www.example.com")
+        XCTAssertTrue(a.sameSite(as: b), "another page on the same site is fine")
+        XCTAssertFalse(a.sameSite(as: c))
+        XCTAssertNil(WebIdentity(url: URL(string: "about:blank")!))
+        XCTAssertNil(WebIdentity(url: URL(fileURLWithPath: "/tmp/x.html")))
+    }
 }
