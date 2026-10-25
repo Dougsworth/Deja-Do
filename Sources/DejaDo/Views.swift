@@ -117,8 +117,10 @@ struct MainView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                Divider()
-                StatusBar()
+                if showsStatus {
+                    Divider()
+                    StatusBar()
+                }
             }
             .background(Color(nsColor: .textBackgroundColor).opacity(0.35))
         }
@@ -130,6 +132,11 @@ struct MainView: View {
         .sheet(item: $model.pendingRun) { pending in
             VariablesSheet(pending: pending).environmentObject(model)
         }
+    }
+
+    /// The status bar only appears when there is something to say.
+    private var showsStatus: Bool {
+        model.isRecording || model.runningID != nil || model.status != nil || !model.permissionsReady
     }
 }
 
@@ -203,7 +210,6 @@ struct Sidebar: View {
                         Circle().fill(Color.red).frame(width: 7, height: 7)
                         Text(model.isRecording ? "Stop and save" : "New recording")
                             .font(.rounded(13, .medium))
-                        Text("⌘R").font(.rounded(11)).foregroundStyle(.tertiary)
                     }
                     .contentShape(Rectangle())
                 }
@@ -358,9 +364,6 @@ struct StatusBar: View {
                 ShortcutHint(label: "Stop", keys: "Esc")
             } else if model.isRecording {
                 ShortcutHint(label: "Save", keys: "⌘↩")
-            } else {
-                ShortcutHint(label: "Run", keys: "⌘↩")
-                ShortcutHint(label: "Record", keys: "⌘R")
             }
         }
         .padding(.horizontal, Metrics.gutter)
@@ -387,15 +390,20 @@ struct StatusBar: View {
 struct AutomationView: View {
     @EnvironmentObject var model: AppModel
     @Binding var automation: Automation
+    /// The step whose settings are open. One at a time keeps the list calm.
+    @State private var expanded: UUID?
 
     private var isRunning: Bool { model.runningID == automation.id }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HeaderBar {
-                TextField("Name", text: $automation.name)
-                    .textFieldStyle(.plain)
-                    .font(.rounded(17, .semibold))
+                VStack(alignment: .leading, spacing: 3) {
+                    TextField("Name", text: $automation.name)
+                        .textFieldStyle(.plain)
+                        .font(.rounded(17, .semibold))
+                    meta
+                }
             } actions: {
                 if isRunning {
                     Button { model.stopRun() } label: {
@@ -426,37 +434,13 @@ struct AutomationView: View {
                 .foregroundStyle(.secondary)
             }
 
-            VStack(alignment: .leading, spacing: 12) {
-                stats
-                if !automation.variableNames.isEmpty {
-                    HStack(spacing: 6) {
-                        Text("Fills in each run").foregroundStyle(.secondary)
-                        Text(automation.variableNames.map { "{{\($0)}}" }.joined(separator: "  "))
-                            .foregroundStyle(Color.accentColor)
-                    }
-                    .font(.rounded(12))
-                }
-            }
-            .padding(.horizontal, Metrics.gutter)
-            .padding(.vertical, 16)
-
-            Divider()
-
-            HStack {
-                Text("Steps").font(.rounded(11, .semibold)).foregroundStyle(.secondary)
-                Spacer()
-                Text("App").font(.rounded(11, .semibold)).foregroundStyle(.secondary)
-                    .frame(width: 140, alignment: .leading)
-            }
-            .padding(.horizontal, Metrics.gutter)
-            .padding(.vertical, 8)
-
-            Divider()
-
             List {
                 ForEach($automation.steps) { $step in
                     let n = number(of: step)
-                    StepRow(step: $step, number: n, state: state(for: n - 1), note: model.runNotes[step.id])
+                    StepRow(step: $step, number: n, state: state(for: n - 1), note: model.runNotes[step.id],
+                            expanded: expanded == step.id) {
+                        withAnimation(.easeOut(duration: 0.15)) { expanded = expanded == step.id ? nil : step.id }
+                    }
                         .listRowSeparator(.visible)
                         .listRowInsets(EdgeInsets(top: 0, leading: Metrics.gutter - 8, bottom: 0, trailing: Metrics.gutter - 8))
                         .contextMenu {
@@ -473,31 +457,32 @@ struct AutomationView: View {
         }
     }
 
-    private var stats: some View {
-        HStack(alignment: .top, spacing: 36) {
-            stat("Steps", "\(automation.steps.count)")
-            stat("Runs", "\(automation.runs)")
-            stat("Last run", lastRunText)
-            stat("Took", automation.lastDuration.map { String(format: "%.1fs", $0) } ?? "–")
-            stat("AI fixes", "\(automation.repairs)")
-            Spacer(minLength: 0)
+    /// One quiet line under the title: how long it is, when it last ran, what it fills in.
+    private var meta: some View {
+        var parts: [Text] = [Text("\(automation.steps.count) steps")]
+        if let last = automation.lastRun {
+            let when = last.formatted(.relative(presentation: .named))
+            let took = automation.lastDuration.map { String(format: " in %.1fs", $0) } ?? ""
+            if automation.lastSucceeded == false {
+                parts.append(Text("failed \(when)").foregroundColor(.red))
+            } else {
+                parts.append(Text("last ran \(when)\(took)"))
+            }
+        } else {
+            parts.append(Text("never run"))
         }
-    }
-
-    private var lastRunText: String {
-        guard let last = automation.lastRun else { return "Never" }
-        let when = last.formatted(.relative(presentation: .named))
-        switch automation.lastSucceeded {
-        case .some(false): return "Failed \(when)"
-        default: return when.prefix(1).uppercased() + when.dropFirst()
+        if automation.repairs > 0 {
+            parts.append(Text("\(automation.repairs) AI \(automation.repairs == 1 ? "fix" : "fixes")"))
         }
-    }
-
-    private func stat(_ label: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(label).font(.rounded(11)).foregroundStyle(.secondary)
-            Text(value).font(.rounded(14, .medium).monospacedDigit())
+        if !automation.variableNames.isEmpty {
+            parts.append(Text(automation.variableNames.map { "{{\($0)}}" }.joined(separator: " "))
+                .foregroundColor(.accentColor))
         }
+        let line = parts.dropFirst().reduce(parts[0]) { $0 + Text("  ·  ") + $1 }
+        return line
+            .font(.rounded(12))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
     }
 
     private func state(for index: Int) -> StepState {
@@ -526,13 +511,14 @@ enum StepState { case idle, current, done }
 /// One numbered row in a step table. Used for saved and live steps alike.
 struct StepLine<Editor: View>: View {
     let number: Int?
-    let symbol: String
     let summary: String
-    let app: String?
+    var app: String? = nil
     var state: StepState = .idle
     var dimmed = false
     /// What this step did on the last run.
     var note: String? = nil
+    /// Opens or closes the step's settings, for steps that have any.
+    var onTap: (() -> Void)? = nil
     @ViewBuilder var editor: () -> Editor
 
     var body: some View {
@@ -553,15 +539,13 @@ struct StepLine<Editor: View>: View {
             }
             .frame(width: 22, alignment: .trailing)
 
-            Image(systemName: symbol)
-                .font(.system(size: 11))
-                .foregroundStyle(state == .current ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.tertiary))
-                .frame(width: 14)
-
             VStack(alignment: .leading, spacing: 4) {
                 Text(summary)
                     .font(.rounded(13, state == .current ? .semibold : .regular))
                     .foregroundStyle(dimmed || state == .done ? .secondary : .primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .onTapGesture { onTap?() }
                 if let note {
                     Text(note)
                         .font(.rounded(11))
@@ -571,15 +555,14 @@ struct StepLine<Editor: View>: View {
                 editor()
             }
 
-            Spacer(minLength: 12)
-
-            Text(app ?? "")
-                .font(.rounded(12))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .frame(width: 140, alignment: .leading)
+            if let app {
+                Text(app)
+                    .font(.rounded(12))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
         }
-        .padding(.vertical, 10)
+        .padding(.vertical, 11)
     }
 }
 
@@ -599,10 +582,24 @@ struct StepRow: View {
     let number: Int
     let state: StepState
     var note: String? = nil
+    /// Settings show only for the open step; the list itself stays one line per step.
+    var expanded = false
+    var toggle: () -> Void = {}
 
     var body: some View {
-        StepLine(number: number, symbol: step.symbol, summary: step.summary, app: step.appName,
-                 state: state, note: note) { editor }
+        StepLine(number: number, summary: step.summary, state: state, note: note,
+                 onTap: hasSettings ? toggle : nil) {
+            if expanded && hasSettings { editor }
+        }
+    }
+
+    private var hasSettings: Bool {
+        switch step.kind {
+        case .type(_, _, let secret, _): return !secret
+        case .wait: return true
+        case .click, .key: return step.expect?.summary != nil
+        case .activate: return false
+        }
     }
 
     @ViewBuilder private var editor: some View {
@@ -621,29 +618,32 @@ struct StepRow: View {
                     .toggleStyle(.checkbox)
                     .font(.rounded(11))
             }
-            .padding(.top, 4)
+            .padding(.top, 6)
             Text("Type {{name}} anywhere to fill it in each run, or from a spreadsheet column.")
-                .font(.rounded(10))
+                .font(.rounded(11))
                 .foregroundStyle(.tertiary)
+                .padding(.bottom, 2)
         case .click, .key:
             if let line = step.expect?.summary {
-                HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 6) {
                     Text(line)
-                        .font(.rounded(10))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                    Text("If not")
-                        .font(.rounded(10))
-                        .foregroundStyle(.tertiary)
-                    Picker("If not", selection: mismatch) {
-                        ForEach(MismatchPolicy.allCases, id: \.self) { Text($0.label).tag($0) }
+                        .font(.rounded(12))
+                        .foregroundStyle(.secondary)
+                    HStack(spacing: 6) {
+                        Text("If it doesn't match")
+                            .font(.rounded(12))
+                            .foregroundStyle(.secondary)
+                        Picker("If it doesn't match", selection: mismatch) {
+                            ForEach(MismatchPolicy.allCases, id: \.self) { Text($0.label).tag($0) }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                        .controlSize(.small)
+                        .fixedSize()
                     }
-                    .pickerStyle(.menu)
-                    .labelsHidden()
-                    .controlSize(.mini)
-                    .fixedSize()
                 }
-                .padding(.top, 2)
+                .padding(.top, 6)
+                .padding(.bottom, 2)
             }
         case .wait:
             Stepper(value: waitSeconds, in: 0.5...60, step: 0.5) {
@@ -736,12 +736,11 @@ struct RecordingView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(model.liveSteps.enumerated()), id: \.element.id) { i, step in
-                        StepLine(number: i + 1, symbol: step.symbol, summary: step.summary, app: step.appName) { EmptyView() }
+                        StepLine(number: i + 1, summary: step.summary) { EmptyView() }
                         Divider()
                     }
                     if !model.pendingText.isEmpty {
-                        StepLine(number: nil, symbol: "character.cursor.ibeam",
-                                 summary: "Typing “\(model.pendingText)”", app: nil, dimmed: true) { EmptyView() }
+                        StepLine(number: nil, summary: "Typing “\(model.pendingText)”", dimmed: true) { EmptyView() }
                     }
                     if model.liveSteps.isEmpty && model.pendingText.isEmpty {
                         Text("Waiting for your first click…")
