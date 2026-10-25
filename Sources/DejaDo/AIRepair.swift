@@ -2,12 +2,11 @@ import Foundation
 import CoreGraphics
 import DejaDoCore
 
-/// When the engine isn't sure, ask Claude which element the user meant.
+/// When the engine isn't sure, ask an AI model which element the user meant.
 /// Only a text list of the window's elements is sent, never a screenshot
 /// and never anything the user typed.
 struct AIRepair {
-    let apiKey: String
-    let model: String
+    let config: AIConfig
 
     struct Choice: Decodable {
         let index: Int
@@ -60,35 +59,31 @@ struct AIRepair {
         Prefer a matching meaning over a matching position. The similarity score is a hint, not the answer.
         """
 
-        let body: [String: Any] = [
-            "model": model,
-            "max_tokens": 300,
-            "system": "You help a Mac automation tool find UI elements. You answer with JSON only.",
-            "messages": [["role": "user", "content": prompt]]
-        ]
-
-        var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
+        let system = "You help a Mac automation tool find UI elements. You answer with JSON only."
+        let call = try AIRequest.build(config, system: system, prompt: prompt)
+        var request = URLRequest(url: call.url)
         request.httpMethod = "POST"
-        request.timeoutInterval = 45
-        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        request.setValue("application/json", forHTTPHeaderField: "content-type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        // Models on the Mac can take a while to load the first time.
+        request.timeoutInterval = config.provider == .ollama ? 120 : 45
+        for (k, v) in call.headers { request.setValue(v, forHTTPHeaderField: k) }
+        request.httpBody = call.body
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        guard status == 200 else {
-            let text = String(data: data, encoding: .utf8) ?? ""
-            throw ReplayError("AI request failed (\(status)): \(text.prefix(200))")
+        let reply: (Data, URLResponse)
+        do {
+            reply = try await URLSession.shared.data(for: request)
+        } catch {
+            if config.provider == .ollama {
+                throw ReplayError("Couldn't reach Ollama. Is it running? (\(error.localizedDescription))")
+            }
+            throw ReplayError("Couldn't reach \(config.provider.name): \(error.localizedDescription)")
         }
-
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let content = json["content"] as? [[String: Any]],
-              let text = content.first(where: { $0["type"] as? String == "text" })?["text"] as? String,
-              let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}") else {
-            throw ReplayError("AI gave an answer Deja Do couldn't read.")
+        let status = (reply.1 as? HTTPURLResponse)?.statusCode ?? 0
+        do {
+            let text = try AIRequest.text(from: reply.0, status: status, provider: config.provider)
+            return try AIRequest.jsonObject(Choice.self, in: text)
+        } catch let e as AIRequestError {
+            throw ReplayError(e.localizedDescription)
         }
-        return try JSONDecoder().decode(Choice.self, from: Data(text[start...end].utf8))
     }
 
     static func direction(_ offset: CGPoint) -> String {

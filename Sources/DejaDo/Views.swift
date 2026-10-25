@@ -966,28 +966,8 @@ struct SettingsView: View {
 
             Divider()
 
-            field("Anthropic API key",
-                  note: "Kept in your keychain. Only a text list of the window's buttons and labels is sent, never your screen or what you typed.") {
-                SecureField("sk-ant-…", text: $model.apiKey)
-            }
-            .disabled(!model.aiEnabled)
-            .opacity(model.aiEnabled ? 1 : 0.5)
-
-            Divider()
-
-            field("Model", note: AppModel.models.first { $0.id == model.model }?.note) {
-                Picker("Model", selection: $model.model) {
-                    ForEach(AppModel.models, id: \.id) { m in
-                        Text(m.name).tag(m.id)
-                    }
-                    // Keeps a model typed in by an older version selectable.
-                    if !AppModel.models.contains(where: { $0.id == model.model }) {
-                        Text(model.model).tag(model.model)
-                    }
-                }
-                .pickerStyle(.menu)
-                .labelsHidden()
-                .fixedSize()
+            VStack(alignment: .leading, spacing: 0) {
+                aiSection
             }
             .disabled(!model.aiEnabled)
             .opacity(model.aiEnabled ? 1 : 0.5)
@@ -1006,8 +986,124 @@ struct SettingsView: View {
             .padding(.top, 16)
         }
         .padding(26)
-        .frame(width: 460)
+        .frame(width: 480)
         .fontDesign(.rounded)
+        .onAppear { if model.aiProvider == .ollama { model.refreshOllamaModels() } }
+    }
+
+    // MARK: AI
+
+    @ViewBuilder private var aiSection: some View {
+        row("AI service", note: providerNote) {
+            Picker("AI service", selection: $model.aiProvider) {
+                ForEach(AIProvider.allCases, id: \.self) { Text($0.name).tag($0) }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .fixedSize()
+        }
+
+        switch model.aiProvider {
+        case .dejaDo:
+            Divider()
+            row("Server", note: nil) {
+                TextField("https://ai.example.com", text: $model.serverURL)
+                    .textFieldStyle(.plain)
+                    .multilineTextAlignment(.trailing)
+                    .frame(maxWidth: 240)
+            }
+            Divider()
+            keyRow
+        case .anthropic, .openai, .gemini:
+            Divider()
+            keyRow
+        case .ollama:
+            Divider()
+            row("Address", note: nil) {
+                TextField(AIRequest.ollamaDefault, text: $model.ollamaURL)
+                    .textFieldStyle(.plain)
+                    .multilineTextAlignment(.trailing)
+                    .frame(maxWidth: 240)
+                    .onSubmit { model.refreshOllamaModels() }
+            }
+        }
+
+        Divider()
+        row("Model", note: modelNote) { modelPicker }
+    }
+
+    private var keyRow: some View {
+        row(model.aiProvider.keyLabel, note: nil) {
+            SecureField(model.aiProvider.keyPlaceholder, text: $model.providerKey)
+                .textFieldStyle(.plain)
+                .multilineTextAlignment(.trailing)
+                .frame(maxWidth: 240)
+        }
+    }
+
+    @ViewBuilder private var modelPicker: some View {
+        if model.aiProvider == .ollama && model.ollamaModels.isEmpty {
+            Button("Look again") { model.refreshOllamaModels() }
+                .buttonStyle(QuietButtonStyle(compact: true))
+        } else {
+            Picker("Model", selection: $model.model) {
+                ForEach(modelChoices, id: \.id) { m in Text(m.name).tag(m.id) }
+                // Keeps a model chosen earlier selectable even if it's no longer listed.
+                if !model.model.isEmpty && !modelChoices.contains(where: { $0.id == model.model }) {
+                    Text(model.model).tag(model.model)
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .fixedSize()
+        }
+    }
+
+    private var modelChoices: [AIModel] {
+        if model.aiProvider == .ollama { return model.ollamaModels.map { AIModel($0, $0, "") } }
+        return AICatalog.models(for: model.aiProvider)
+    }
+
+    private var providerNote: String {
+        switch model.aiProvider {
+        case .dejaDo:
+            return "Goes through the Deja Do server, which holds the API keys. You only need the access code you were given."
+        case .anthropic, .openai, .gemini:
+            return "Uses your own \(model.aiProvider.name) key, kept in your keychain. Only a text list of the window's buttons and labels is sent, never your screen or what you typed."
+        case .ollama:
+            return "Runs a model on this Mac, so nothing leaves it and it's free. Needs Ollama installed and a model pulled, for example ollama pull qwen3:8b."
+        }
+    }
+
+    private var modelNote: String? {
+        if model.aiProvider == .ollama {
+            if !model.ollamaReachable { return "Couldn't reach Ollama. Open it, then look again." }
+            if model.ollamaModels.isEmpty { return "No models installed yet." }
+            return nil
+        }
+        let note = modelChoices.first { $0.id == model.model }?.note
+        if model.aiProvider == .dejaDo, let note {
+            return note + " Runs on " + AICatalog.vendor(ofModel: model.model).name + "."
+        }
+        return note
+    }
+
+    /// A label on the left, its control on the right, an optional note under both.
+    private func row<C: View>(_ title: String, note: String?, @ViewBuilder control: () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 12) {
+                Text(title).font(.rounded(13))
+                Spacer(minLength: 12)
+                control().font(.rounded(13))
+            }
+            if let note {
+                Text(note)
+                    .font(.rounded(11))
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.vertical, 12)
     }
 
     private func toggle(_ title: String, isOn: Binding<Bool>, note: String) -> some View {
@@ -1018,22 +1114,6 @@ struct SettingsView: View {
                 .font(.rounded(11))
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.vertical, 14)
-    }
-
-    private func field<F: View>(_ title: String, note: String?, @ViewBuilder input: () -> F) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.rounded(12, .medium)).foregroundStyle(.secondary)
-            input()
-                .textFieldStyle(.plain)
-                .font(.rounded(13))
-            if let note {
-                Text(note)
-                    .font(.rounded(11))
-                    .foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
         }
         .padding(.vertical, 14)
     }

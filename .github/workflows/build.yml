@@ -26,3 +26,14 @@ jobs:
           name: Deja-Do-app
           path: build/Deja Do.app
           retention-days: 14
+
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.23
+      - name: Test the AI server
+        working-directory: server
+        run: bun test

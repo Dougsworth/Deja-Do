@@ -80,7 +80,17 @@ Only a few short labels are kept for this, never a copy of the screen. When a ta
 
 ## AI repair
 
-Add an Anthropic API key in Settings (the gear in the sidebar). Only a text list of the window's elements is sent: roles, labels and positions. Never a screenshot or the recorded pictures, and never what you typed. The fixed step is saved, so the next run is fast again.
+Pick the AI service in Settings:
+
+| Service | What it needs |
+| --- | --- |
+| Deja Do | An access code. Requests go through your own server, which holds the keys (see `server/README.md`) |
+| Anthropic | Your Anthropic key: Claude Haiku, Sonnet or Opus 5.5 |
+| OpenAI | Your OpenAI key: GPT-6 Luna or GPT-6.1 Sol |
+| Google Gemini | Your Gemini key: Gemini 3.5 Flash Lite, 3.8 Flash or 4 Argon |
+| Ollama | Nothing. Runs a model on the Mac, free and private. Install Ollama and pull a model |
+
+Keys are kept in the keychain. Only a text list of the window's elements is sent: roles, labels and positions. Never a screenshot or the recorded pictures, and never what you typed. The fixed step is saved, so the next run is fast again.
 
 ## Project layout
 
@@ -98,7 +108,9 @@ Add an Anthropic API key in Settings (the gear in the sidebar). Only a text list
 | `Sources/DejaDo/Finder.swift` | Gathers what's on screen and asks the engine |
 | `Sources/DejaDo/Replayer.swift` | Runs steps, waits for screens to settle, calls the AI and learns |
 | `Sources/DejaDo/Recorder.swift` | Event tap for clicks and keys |
-| `Sources/DejaDo/AIRepair.swift` | The Claude request |
+| `Sources/DejaDoCore/AIProviders.swift` | Requests and replies for each AI service |
+| `Sources/DejaDo/AIRepair.swift` | The question sent to the AI |
+| `server/` | The Deja Do AI server for Dokploy |
 | `Sources/DejaDo/ScreenVision.swift` | ScreenCaptureKit capture, Vision text reading, before and after reads |
 | `Tests/DejaDoCoreTests` | Engine, vision and step checking tests. They also run on Linux |
 

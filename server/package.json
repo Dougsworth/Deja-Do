@@ -1,0 +1,9 @@
+{
+  "name": "dejado-server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun src/index.ts",
+    "test": "bun test"
+  }
+}

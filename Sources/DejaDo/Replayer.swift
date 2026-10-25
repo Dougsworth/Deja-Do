@@ -5,8 +5,8 @@ import DejaDoCore
 /// Plays an automation back. Runs off the main thread; reports through callbacks.
 final class Replayer {
     struct Settings {
-        var apiKey: String?
-        var model: String
+        /// Which AI service and model to ask, with its key.
+        var ai: AIConfig
         var aiEnabled: Bool
         /// Learned match weights per app bundle ID.
         var weights: [String: MatchWeights] = [:]
@@ -296,8 +296,11 @@ final class Replayer {
         }
 
         let what = Step(kind: .click(target: target, button: .left, count: 1, modifiers: 0)).summary
-        guard settings.aiEnabled, let key = settings.apiKey, !key.isEmpty else {
-            throw ReplayError("Couldn't find “\(what)” with confidence. Add an API key in Settings to let AI look for it.")
+        guard settings.aiEnabled else {
+            throw ReplayError("Couldn't find “\(what)” with confidence. Turn on AI in Settings to let it look.")
+        }
+        if let problem = settings.ai.problem {
+            throw ReplayError("Couldn't find “\(what)” with confidence. \(problem)")
         }
         guard let outcome = last, !outcome.snapshots.isEmpty else {
             throw ReplayError("Couldn't read the \(target.appName) window to look for “\(what)”.")
@@ -308,7 +311,7 @@ final class Replayer {
         case .ambiguous(let list), .notFound(let list): shortlist = list
         case .confident(let c): shortlist = [c]
         }
-        let choice = try await AIRepair(apiKey: key, model: settings.model)
+        let choice = try await AIRepair(config: settings.ai)
             .choose(target: target, shortlist: shortlist.map { (snapshot: outcome.snapshot(for: $0), score: $0.score) })
         guard choice.index >= 0, choice.index < shortlist.count else {
             throw ReplayError("Couldn't find “\(what)”, and AI didn't see a match: \(choice.reason ?? "no reason given").")

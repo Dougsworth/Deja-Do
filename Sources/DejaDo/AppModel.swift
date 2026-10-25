@@ -42,8 +42,35 @@ final class AppModel: ObservableObject, @unchecked Sendable {
     @Published var isFinishingRecording = false
 
     @Published var aiEnabled: Bool { didSet { UserDefaults.standard.set(aiEnabled, forKey: "aiEnabled") } }
-    @Published var model: String { didSet { UserDefaults.standard.set(model, forKey: "model") } }
-    @Published var apiKey: String { didSet { Keychain.set(apiKey, for: "anthropic") } }
+    /// Which AI service to ask. Switching loads that service's model and key.
+    @Published var aiProvider: AIProvider {
+        didSet {
+            guard aiProvider != oldValue else { return }
+            UserDefaults.standard.set(aiProvider.rawValue, forKey: "aiProvider")
+            switchingProvider = true
+            model = Self.savedModel(for: aiProvider)
+            providerKey = aiProvider.keychainAccount.flatMap { Keychain.get($0) } ?? ""
+            switchingProvider = false
+            if aiProvider == .ollama { refreshOllamaModels() }
+        }
+    }
+    /// The model for the current service. Each service remembers its own.
+    @Published var model: String {
+        didSet { UserDefaults.standard.set(model, forKey: "model.\(aiProvider.rawValue)") }
+    }
+    /// API key, or the access code for the Deja Do server. Kept in the keychain.
+    @Published var providerKey: String {
+        didSet {
+            guard !switchingProvider, let account = aiProvider.keychainAccount else { return }
+            Keychain.set(providerKey.trimmingCharacters(in: .whitespacesAndNewlines), for: account)
+        }
+    }
+    @Published var serverURL: String { didSet { UserDefaults.standard.set(serverURL, forKey: "serverURL") } }
+    @Published var ollamaURL: String { didSet { UserDefaults.standard.set(ollamaURL, forKey: "ollamaURL") } }
+    /// Models installed in Ollama, read from the Mac.
+    @Published var ollamaModels: [String] = []
+    @Published var ollamaReachable = true
+    private var switchingProvider = false
     /// Record and match on what the screen looks like, when Screen Recording is allowed.
     @Published var useVision: Bool { didSet { UserDefaults.standard.set(useVision, forKey: "useVision") } }
     /// Confirm each step changed the screen the way it did when recorded.
@@ -58,21 +85,37 @@ final class AppModel: ObservableObject, @unchecked Sendable {
     private var runStarted: Date?
     private var escapeMonitor: Any?
 
-    static let defaultModel = "claude-sonnet-5-5"
+    /// The Deja Do server built into this copy of the app, from Info.plist.
+    static let bundledServer = (Bundle.main.object(forInfoDictionaryKey: "DejaDoServerURL") as? String)?
+        .trimmingCharacters(in: .whitespaces) ?? ""
 
-    /// The models offered in Settings, fastest first.
-    static let models: [(id: String, name: String, note: String)] = [
-        ("claude-haiku-5-5", "Claude Haiku 5.5", "Fastest and cheapest. Fine for most fixes."),
-        ("claude-sonnet-5-5", "Claude Sonnet 5.5", "A good balance of speed and judgement. The default."),
-        ("claude-opus-5-5", "Claude Opus 5.5", "Most careful, slowest and most expensive.")
-    ]
+    static func savedModel(for p: AIProvider) -> String {
+        let saved = UserDefaults.standard.string(forKey: "model.\(p.rawValue)")?.trimmingCharacters(in: .whitespaces) ?? ""
+        return saved.isEmpty ? AICatalog.defaultModel(for: p) : saved
+    }
+
+    var aiConfig: AIConfig {
+        AIConfig(provider: aiProvider, model: model, key: providerKey,
+                 baseURL: aiProvider == .dejaDo ? serverURL : (aiProvider == .ollama ? ollamaURL : nil))
+    }
 
     init() {
         let defaults = UserDefaults.standard
         aiEnabled = defaults.object(forKey: "aiEnabled") as? Bool ?? true
-        let saved = defaults.string(forKey: "model")?.trimmingCharacters(in: .whitespaces) ?? ""
-        model = saved.isEmpty ? Self.defaultModel : saved
-        apiKey = Keychain.get("anthropic") ?? ""
+        serverURL = defaults.string(forKey: "serverURL") ?? Self.bundledServer
+        ollamaURL = defaults.string(forKey: "ollamaURL") ?? AIRequest.ollamaDefault
+
+        // Versions before provider choice had one model setting and an Anthropic key.
+        if defaults.string(forKey: "aiProvider") == nil, let old = defaults.string(forKey: "model"), !old.isEmpty,
+           defaults.string(forKey: "model.anthropic") == nil {
+            defaults.set(old, forKey: "model.anthropic")
+        }
+        let hasAnthropicKey = !(Keychain.get("anthropic") ?? "").isEmpty
+        let provider = defaults.string(forKey: "aiProvider").flatMap(AIProvider.init(rawValue:))
+            ?? (hasAnthropicKey || Self.bundledServer.isEmpty ? .anthropic : .dejaDo)
+        aiProvider = provider
+        model = Self.savedModel(for: provider)
+        providerKey = provider.keychainAccount.flatMap { Keychain.get($0) } ?? ""
         useVision = defaults.object(forKey: "useVision") as? Bool ?? true
         checkSteps = defaults.object(forKey: "checkSteps") as? Bool ?? true
         automations = persistence.loadAll()
@@ -90,6 +133,30 @@ final class AppModel: ObservableObject, @unchecked Sendable {
     }
 
     var permissionsReady: Bool { hasAccessibility && hasInputMonitoring }
+
+    /// Asks Ollama which models are installed.
+    func refreshOllamaModels() {
+        let base = ollamaURL
+        Task { [weak self] in
+            var found: [String] = []
+            var reachable = false
+            if let url = URL(string: (base.hasSuffix("/") ? String(base.dropLast()) : base) + "/api/tags") {
+                var request = URLRequest(url: url)
+                request.timeoutInterval = 3
+                if let reply = try? await URLSession.shared.data(for: request),
+                   (reply.1 as? HTTPURLResponse)?.statusCode == 200 {
+                    reachable = true
+                    found = AIRequest.ollamaModels(from: reply.0)
+                }
+            }
+            await MainActor.run {
+                guard let self else { return }
+                self.ollamaModels = found
+                self.ollamaReachable = reachable
+                if self.aiProvider == .ollama, self.model.isEmpty, let first = found.first { self.model = first }
+            }
+        }
+    }
 
     func refreshPermissions() {
         let a = Permissions.accessibility, i = Permissions.inputMonitoring, s = ScreenVision.hasPermission
@@ -219,8 +286,7 @@ final class AppModel: ObservableObject, @unchecked Sendable {
         startEscapeMonitor()
 
         refreshPermissions()
-        let settings = Replayer.Settings(apiKey: apiKey, model: model.isEmpty ? Self.defaultModel : model,
-                                         aiEnabled: aiEnabled, weights: weights,
+        let settings = Replayer.Settings(ai: aiConfig, aiEnabled: aiEnabled, weights: weights,
                                          visionEnabled: visionActive, checkSteps: checkSteps)
         let id = automation.id
         let callbacks = Replayer.Callbacks(

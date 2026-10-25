@@ -22,6 +22,8 @@
     <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>DejaDoServerURL</key>
+    <string></string>
     <key>CFBundleDocumentTypes</key>
     <array>
         <dict>
