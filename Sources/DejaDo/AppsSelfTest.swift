@@ -183,7 +183,6 @@ enum AppsSelfTest {
         guard let el = appElement() else { return false }
         for w in AX.elements(AX.raw(el, kAXWindowsAttribute)) {
             if AX.elements(AX.raw(w, kAXChildrenAttribute)).contains(where: { AX.role($0) == "AXSheet" }) { return true }
-            if AX.string(w, kAXSubroleAttribute) == "AXDialog" { return true }
             let texts = AX.collect(from: w, origin: nil, limit: 300) { $0 == "AXStaticText" || $0 == "AXButton" }
             if texts.contains(where: { ($0.node.label ?? "").hasPrefix("Save As") }) { return true }
         }
@@ -200,7 +199,11 @@ enum AppsSelfTest {
             if let a = app(), a.isFinishedLaunching, NSWorkspace.shared.frontmostApplication?.bundleIdentifier == textEditID { break }
             app()?.activate(options: [.activateIgnoringOtherApps])
         }
-        // TextEdit may open with the file chooser instead of a document.
+        // TextEdit may open with the file chooser instead of a document: cancel it first.
+        if let el = appElement(), AX.elements(AX.raw(el, kAXWindowsAttribute)).contains(where: { AX.string($0, kAXSubroleAttribute) == "AXDialog" }) {
+            key(53, command: false)
+            try? await Task.sleep(nanoseconds: 800_000_000)
+        }
         return await newDocument()
     }
 
@@ -208,12 +211,21 @@ enum AppsSelfTest {
     static func newDocument() async -> Bool {
         app()?.activate(options: [.activateIgnoringOtherApps])
         try? await Task.sleep(nanoseconds: 400_000_000)
+        let before = documentWindows().count
         key(45, command: true)   // ⌘N
         for _ in 0..<30 {
             try? await Task.sleep(nanoseconds: 250_000_000)
-            if textArea() != nil, !sheetShowing() { try? await Task.sleep(nanoseconds: 500_000_000); return true }
+            if documentWindows().count > before, textArea() != nil, !sheetShowing() {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                return true
+            }
         }
         return false
+    }
+
+    static func documentWindows() -> [AXUIElement] {
+        guard let el = appElement() else { return [] }
+        return AX.elements(AX.raw(el, kAXWindowsAttribute)).filter { AX.string($0, kAXSubroleAttribute) == "AXStandardWindow" }
     }
 
     static func clickPage() async -> Bool {
