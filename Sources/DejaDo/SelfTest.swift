@@ -24,11 +24,11 @@ enum SelfTest {
 
     static let calculatorID = "com.apple.calculator"
 
-    /// `--suite calculator` or `--suite web` runs one; the default runs both.
+    /// `--suite calculator`, `web` or `apps` runs one; the default runs all three.
     static var suites: Set<String> {
         let args = CommandLine.arguments
         if let i = args.firstIndex(of: "--suite"), i + 1 < args.count { return [args[i + 1].lowercased()] }
-        return ["calculator", "web"]
+        return ["calculator", "web", "apps"]
     }
 
     static func start() {
@@ -81,6 +81,7 @@ enum SelfTest {
         var passed = true
         if suites.contains("calculator") { passed = await calculator(log, vision: vision) && passed }
         if suites.contains("web") { passed = await WebSelfTest.run(log, vision: vision) && passed }
+        if suites.contains("apps") { passed = await AppsSelfTest.run(log, vision: vision) && passed }
         return passed && log.failures == 0
     }
 

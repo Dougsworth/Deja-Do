@@ -5,7 +5,7 @@
 #        ./build.sh test     run the engine's unit tests
 #        ./build.sh release  sign with Developer ID, notarize, and zip it to send to people
 #        ./build.sh selftest build, install, then drive Calculator and a web form in Safari end to end
-#                            (results in self-test.txt; SUITE=calculator or SUITE=web runs one of them)
+#                            (results in self-test.txt; SUITE=calculator, web or apps runs one of them)
 #        ./build.sh watch    wait for a .selftest-request file, then run the self test; repeats until Ctrl+C
 #
 # Release needs the paid Apple Developer Program, a "Developer ID Application"
