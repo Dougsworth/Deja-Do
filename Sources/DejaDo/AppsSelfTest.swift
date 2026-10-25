@@ -69,7 +69,10 @@ enum AppsSelfTest {
             return
         }
         log.check("TextEdit opens with a new document", true)
-        var documents = 1
+        // Only the documents this test makes are ever closed. TextEdit may well
+        // have the person's own files open, and those are not touched.
+        var mine = Set<String>()
+        if let t = frontTitle() { mine.insert(t) }
 
         // Record: click in the page, type, ⌘S, Esc.
         let recorder = await MainActor.run { () -> Recorder in
@@ -112,13 +115,13 @@ enum AppsSelfTest {
                       task.steps[i].expect?.summary ?? "nothing")
         }
         guard acted, sheetSeen else {
-            await closeDocuments(documents)
+            await closeDocuments(mine)
             return
         }
 
         // Replay into a fresh document.
-        guard await newDocument() else { log.check("A second document opens", false); await closeDocuments(documents); return }
-        documents += 1
+        guard await newDocument() else { log.check("A second document opens", false); await closeDocuments(mine); return }
+        if let t = frontTitle() { mine.insert(t) }
         let (error, notes) = await SelfTest.runTask(task, vision: vision)
         let once = occurrences(of: sentence) == 1
         log.check("Replay types the sentence exactly once and closes the sheet", error == nil && once && !sheetShowing(),
@@ -135,8 +138,8 @@ enum AppsSelfTest {
             broken.steps[i].expect = e
             broken.steps[i].onMismatch = .retryThenStop
         }
-        guard await newDocument() else { log.check("A third document opens", false); await closeDocuments(documents); return }
-        documents += 1
+        guard await newDocument() else { log.check("A third document opens", false); await closeDocuments(mine); return }
+        if let t = frontTitle() { mine.insert(t) }
         let (stopError, stopNotes) = await SelfTest.runTask(broken, vision: vision)
         log.check("A ⌘S whose result doesn't match stops the run without being repeated",
                   stopError?.contains("Sent to Ana") == true && !stopNotes.contains("trying once more") && occurrences(of: sentence) == 1,
@@ -145,7 +148,12 @@ enum AppsSelfTest {
         log.line("      notes: \(stopNotes)")
         if sheetShowing() { key(53, command: false); try? await Task.sleep(nanoseconds: 800_000_000) }
 
-        await closeDocuments(documents)
+        await closeDocuments(mine)
+    }
+
+    static func frontTitle() -> String? {
+        guard let el = appElement(), let w = AX.element(el, kAXFocusedWindowAttribute) else { return nil }
+        return AX.string(w, kAXTitleAttribute)
     }
 
     static func app() -> NSRunningApplication? {
@@ -207,25 +215,24 @@ enum AppsSelfTest {
         return await newDocument()
     }
 
-    /// ⌘N, then wait for a document window with a text area to be in front.
+    /// ⌘N, then wait for a new Untitled document to be in front.
     static func newDocument() async -> Bool {
         app()?.activate(options: [.activateIgnoringOtherApps])
         try? await Task.sleep(nanoseconds: 400_000_000)
-        let before = documentWindows().count
+        let before = Set(windowTitles())
         key(45, command: true)   // ⌘N
         for _ in 0..<30 {
             try? await Task.sleep(nanoseconds: 250_000_000)
-            if documentWindows().count > before, textArea() != nil, !sheetShowing() {
-                try? await Task.sleep(nanoseconds: 500_000_000)
-                return true
-            }
+            guard let t = frontTitle(), t.hasPrefix("Untitled"), !before.contains(t), textArea() != nil else { continue }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            return true
         }
         return false
     }
 
-    static func documentWindows() -> [AXUIElement] {
+    static func windowTitles() -> [String] {
         guard let el = appElement() else { return [] }
-        return AX.elements(AX.raw(el, kAXWindowsAttribute)).filter { AX.string($0, kAXSubroleAttribute) == "AXStandardWindow" }
+        return AX.elements(AX.raw(el, kAXWindowsAttribute)).compactMap { AX.string($0, kAXTitleAttribute) }
     }
 
     static func clickPage() async -> Bool {
@@ -239,18 +246,21 @@ enum AppsSelfTest {
         Input.key(code, modifiers: command ? CGEventFlags.maskCommand.rawValue : 0)
     }
 
-    /// Closes the documents the test opened, telling TextEdit to delete each one.
-    static func closeDocuments(_ count: Int) async {
-        for _ in 0..<count {
-            guard window() != nil else { return }
+    /// Closes only the Untitled documents this test made, telling TextEdit to
+    /// delete each. Anything else open in TextEdit is left exactly as it was.
+    static func closeDocuments(_ titles: Set<String>) async {
+        guard let el = appElement() else { return }
+        for w in AX.elements(AX.raw(el, kAXWindowsAttribute)) {
+            guard let title = AX.string(w, kAXTitleAttribute), titles.contains(title), title.hasPrefix("Untitled") else { continue }
+            AXUIElementSetAttributeValue(w, kAXMainAttribute as CFString, kCFBooleanTrue)
             app()?.activate(options: [.activateIgnoringOtherApps])
             try? await Task.sleep(nanoseconds: 300_000_000)
-            key(13, command: true)   // ⌘W
+            if let close = AX.element(w, kAXCloseButtonAttribute) { AX.perform(close, kAXPressAction) } else { continue }
             for _ in 0..<12 {
                 try? await Task.sleep(nanoseconds: 250_000_000)
-                guard let w = window(), let sheet = AX.elements(AX.raw(w, kAXChildrenAttribute)).first(where: { AX.role($0) == "AXSheet" }) else { continue }
+                guard let sheet = AX.elements(AX.raw(w, kAXChildrenAttribute)).first(where: { AX.role($0) == "AXSheet" }) else { continue }
                 let buttons = AX.collect(from: sheet, origin: nil, limit: 200) { $0 == "AXButton" }
-                if let delete = buttons.first(where: { ($0.node.label ?? "").lowercased() == "delete" || ($0.node.label ?? "").lowercased() == "don't save" }) {
+                if let delete = buttons.first(where: { ($0.node.label ?? "").lowercased() == "delete" }) {
                     AX.perform(delete.element, kAXPressAction)
                 }
                 break
