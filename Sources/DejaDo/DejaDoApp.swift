@@ -2,9 +2,18 @@ import SwiftUI
 import AppKit
 import DejaDoCore
 
+/// Opens .dejado files double-clicked in Finder or dropped on the app.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func application(_ application: NSApplication, open urls: [URL]) {
+        AppModel.shared.importFiles(urls)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
 @main
 struct DejaDoApp: App {
-    @StateObject private var model = AppModel()
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+    @StateObject private var model = AppModel.shared
 
     var body: some Scene {
         MenuBarExtra {
@@ -79,7 +88,7 @@ struct MenuContent: View {
         if !model.automations.isEmpty && !model.isRecording {
             Divider()
             ForEach(model.automations.prefix(8)) { a in
-                Button("Run “\(a.name)”") { model.run(a) }
+                Button("Run “\(a.name)”") { if model.run(a) { openMain() } }
                     .disabled(model.runningID != nil)
             }
         }

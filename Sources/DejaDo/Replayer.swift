@@ -37,7 +37,8 @@ final class Replayer {
 
     private var weights: [String: MatchWeights] = [:]
 
-    func run(_ automation: Automation, settings: Settings, callbacks: Callbacks) async throws {
+    func run(_ automation: Automation, settings: Settings, callbacks: Callbacks,
+             values: [String: String] = [:]) async throws {
         isCancelled = false
         weights = settings.weights
         guard AXIsProcessTrusted() else { throw ReplayError("Deja Do needs Accessibility permission to run automations.") }
@@ -61,7 +62,7 @@ final class Replayer {
                 try click(match: match, target: target, button: button, count: count, modifiers: modifiers)
 
             case .type(let text, let ask, let secret, let prompt):
-                var toType = text
+                var toType = Variables.fill(text, with: values)
                 if ask || secret {
                     let front = NSWorkspace.shared.frontmostApplication
                     let label = prompt.isEmpty ? "Text to type" : prompt

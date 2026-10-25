@@ -1,10 +1,21 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 import DejaDoCore
 
 /// App state shared by the menu bar and the main window. Only touched on the
 /// main thread, which is why it can be marked as safe to hand across tasks.
 final class AppModel: ObservableObject, @unchecked Sendable {
+    /// One model for the whole app, so opening a .dejado file from Finder can reach it.
+    static let shared = AppModel()
+
+    /// A run waiting for the user to fill in its variables.
+    struct PendingRun: Identifiable {
+        let id = UUID()
+        let automationID: UUID
+        let names: [String]
+    }
+
     @Published var automations: [Automation] = []
     @Published var selection: UUID?
 
@@ -17,6 +28,12 @@ final class AppModel: ObservableObject, @unchecked Sendable {
     @Published var status: String?
     /// What each step did on the most recent run, keyed by step ID. Not saved.
     @Published var runNotes: [UUID: String] = [:]
+    @Published var pendingRun: PendingRun?
+    /// Which spreadsheet row is running, counted from 0, when looping over a file.
+    @Published var runningRow = 0
+    @Published var rowCount = 1
+    /// Last values typed into the variables form, per task, so the next run is prefilled.
+    private(set) var lastValues: [UUID: [String: String]] = [:]
 
     @Published var hasAccessibility = Permissions.accessibility
     @Published var hasInputMonitoring = Permissions.inputMonitoring
@@ -105,7 +122,53 @@ final class AppModel: ObservableObject, @unchecked Sendable {
 
     // MARK: Running
 
-    func run(_ automation: Automation) {
+    /// Runs a task. If it uses {{variables}}, asks for them first and returns
+    /// true so the caller can bring the window forward.
+    @discardableResult
+    func run(_ automation: Automation) -> Bool {
+        guard runningID == nil, !isRecording else { return false }
+        let names = automation.variableNames
+        if !names.isEmpty {
+            pendingRun = PendingRun(automationID: automation.id, names: names)
+            return true
+        }
+        start(automation, rows: [[:]])
+        return false
+    }
+
+    /// Called by the variables form.
+    func runPending(values: [String: String]) {
+        guard let p = pendingRun, let a = automations.first(where: { $0.id == p.automationID }) else { return }
+        pendingRun = nil
+        lastValues[a.id] = values
+        start(a, rows: [values])
+    }
+
+    /// Asks for a CSV and runs the task once per row, filling variables from its columns.
+    func runForEachRow(_ automation: Automation) {
+        guard runningID == nil, !isRecording else { return }
+        let panel = NSOpenPanel()
+        panel.title = "Run “\(automation.name)” for each row"
+        panel.message = "Pick a CSV saved from Excel, Numbers or Google Sheets. Column names fill the matching {{variables}}."
+        panel.allowedContentTypes = [.commaSeparatedText, .tabSeparatedText, .plainText]
+        panel.allowsMultipleSelection = false
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard let text = (try? String(contentsOf: url, encoding: .utf8)) ?? (try? String(contentsOf: url, encoding: .isoLatin1)) else {
+            status = "Couldn't read \(url.lastPathComponent)."
+            return
+        }
+        let (headers, rows) = CSV.records(text)
+        guard !rows.isEmpty else { status = "\(url.lastPathComponent) has no rows under its header."; return }
+        let missing = Variables.missing(automation.variableNames, in: headers)
+        guard missing.isEmpty else {
+            status = "\(url.lastPathComponent) has no column for " + missing.map { "{{\($0)}}" }.joined(separator: ", ") + "."
+            return
+        }
+        start(automation, rows: rows)
+    }
+
+    private func start(_ automation: Automation, rows: [[String: String]]) {
         guard runningID == nil, !isRecording else { return }
         refreshPermissions()
         guard hasAccessibility else {
@@ -113,6 +176,8 @@ final class AppModel: ObservableObject, @unchecked Sendable {
             status = "Allow Accessibility for Deja Do, then run it again."
             return
         }
+        runningRow = 0
+        rowCount = max(1, rows.count)
         runningID = automation.id
         runningStep = 0
         runStarted = Date()
@@ -149,27 +214,39 @@ final class AppModel: ObservableObject, @unchecked Sendable {
             }
         )
         let replayer = self.replayer
+        let total = rows.count
         Task.detached {
             var failure: String?
-            do {
-                try await replayer.run(automation, settings: settings, callbacks: callbacks)
-            } catch {
-                failure = error.localizedDescription
+            for (r, values) in rows.enumerated() {
+                DispatchQueue.main.async { [weak self] in
+                    self?.runningRow = r
+                    if total > 1 { self?.status = "Row \(r + 1) of \(total)…" }
+                }
+                do {
+                    try await replayer.run(automation, settings: settings, callbacks: callbacks, values: values)
+                } catch {
+                    let message = error.localizedDescription
+                    failure = total > 1 ? "Stopped at row \(r + 1) of \(total): \(message)" : message
+                    break
+                }
             }
-            DispatchQueue.main.async { [weak self] in self?.finishRun(id: id, failure: failure) }
+            let done = failure
+            DispatchQueue.main.async { [weak self] in
+                self?.finishRun(id: id, failure: done, rows: total)
+            }
         }
     }
 
     func stopRun() { replayer.cancel() }
 
-    private func finishRun(id: UUID, failure: String?) {
+    private func finishRun(id: UUID, failure: String?, rows: Int = 1) {
         stopEscapeMonitor()
         runningID = nil
         if let failure {
             status = failure
             NSSound.beep()
         } else {
-            status = "Done."
+            status = rows > 1 ? "Done. Ran all \(rows) rows." : "Done."
         }
         let duration = runStarted.map { Date().timeIntervalSince($0) }
         update(id) { a in
@@ -201,6 +278,70 @@ final class AppModel: ObservableObject, @unchecked Sendable {
     private func stopEscapeMonitor() {
         if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) }
         escapeMonitor = nil
+    }
+
+    // MARK: Sharing
+
+    static let taskType = UTType(filenameExtension: TaskFile.fileExtension, conformingTo: .json) ?? .json
+
+    /// Saves a task to a .dejado file for another Mac or person.
+    func export(_ id: UUID) {
+        guard let a = automations.first(where: { $0.id == id }) else { return }
+        let panel = NSSavePanel()
+        panel.title = "Export “\(a.name)”"
+        panel.message = "Run history and anything typed into password or ask each run steps are left out."
+        panel.nameFieldStringValue = Self.fileName(a.name) + "." + TaskFile.fileExtension
+        panel.allowedContentTypes = [Self.taskType]
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try TaskFile.encode(a).write(to: url, options: .atomic)
+            status = "Exported to \(url.lastPathComponent)."
+        } catch {
+            status = "Couldn't export: \(error.localizedDescription)"
+        }
+    }
+
+    func importTasks() {
+        let panel = NSOpenPanel()
+        panel.title = "Import tasks"
+        panel.allowedContentTypes = [Self.taskType, .json]
+        panel.allowsMultipleSelection = true
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK else { return }
+        importFiles(panel.urls)
+    }
+
+    /// Adds tasks from .dejado files. Also used when a file is opened from Finder.
+    func importFiles(_ urls: [URL]) {
+        var added: [Automation] = []
+        var problems: [String] = []
+        for url in urls {
+            do {
+                let a = try TaskFile.decode(Data(contentsOf: url))
+                added.append(a)
+            } catch {
+                problems.append("\(url.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+        for a in added {
+            automations.insert(a, at: 0)
+            persistence.save(a)
+        }
+        if let first = added.first { selection = first.id }
+        if !problems.isEmpty {
+            status = problems.joined(separator: " ")
+        } else if added.count == 1 {
+            status = "Imported “\(added[0].name)”. Check its steps before you run it."
+        } else if added.count > 1 {
+            status = "Imported \(added.count) tasks. Check their steps before you run them."
+        }
+    }
+
+    private static func fileName(_ name: String) -> String {
+        let bad = CharacterSet(charactersIn: "/\\:?%*|\"<>")
+        let cleaned = name.components(separatedBy: bad).joined(separator: " ").trimmingCharacters(in: .whitespaces)
+        return cleaned.isEmpty ? "Task" : cleaned
     }
 
     // MARK: Editing

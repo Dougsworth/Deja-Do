@@ -127,6 +127,9 @@ struct MainView: View {
         .sheet(isPresented: $showSettings) {
             SettingsView().environmentObject(model)
         }
+        .sheet(item: $model.pendingRun) { pending in
+            VariablesSheet(pending: pending).environmentObject(model)
+        }
     }
 }
 
@@ -211,6 +214,18 @@ struct Sidebar: View {
                 Spacer()
 
                 Button {
+                    model.importTasks()
+                } label: {
+                    Image(systemName: "square.and.arrow.down")
+                        .font(.system(size: 13))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Import a task")
+                .padding(.trailing, 14)
+
+                Button {
                     showSettings = true
                 } label: {
                     Image(systemName: "gearshape")
@@ -262,7 +277,10 @@ struct SidebarRow: View {
         .onHover { hovering = $0 }
         .contextMenu {
             Button("Run") { model.run(automation) }
+            Button("Run for each row of a spreadsheet…") { model.runForEachRow(automation) }
+            Divider()
             Button("Duplicate") { model.duplicate(automation.id) }
+            Button("Export…") { model.export(automation.id) }
             Divider()
             Button("Delete", role: .destructive) { model.delete(automation.id) }
         }
@@ -393,7 +411,10 @@ struct AutomationView: View {
                     .disabled(model.runningID != nil || model.isRecording)
                 }
                 Menu {
+                    Button("Run for each row of a spreadsheet…") { model.runForEachRow(automation) }
+                    Divider()
                     Button("Duplicate") { model.duplicate(automation.id) }
+                    Button("Export…") { model.export(automation.id) }
                     Divider()
                     Button("Delete", role: .destructive) { model.delete(automation.id) }
                 } label: {
@@ -405,9 +426,19 @@ struct AutomationView: View {
                 .foregroundStyle(.secondary)
             }
 
-            stats
-                .padding(.horizontal, Metrics.gutter)
-                .padding(.vertical, 16)
+            VStack(alignment: .leading, spacing: 12) {
+                stats
+                if !automation.variableNames.isEmpty {
+                    HStack(spacing: 6) {
+                        Text("Fills in each run").foregroundStyle(.secondary)
+                        Text(automation.variableNames.map { "{{\($0)}}" }.joined(separator: "  "))
+                            .foregroundStyle(Color.accentColor)
+                    }
+                    .font(.rounded(12))
+                }
+            }
+            .padding(.horizontal, Metrics.gutter)
+            .padding(.vertical, 16)
 
             Divider()
 
@@ -591,6 +622,9 @@ struct StepRow: View {
                     .font(.rounded(11))
             }
             .padding(.top, 4)
+            Text("Type {{name}} anywhere to fill it in each run, or from a spreadsheet column.")
+                .font(.rounded(10))
+                .foregroundStyle(.tertiary)
         case .wait:
             Stepper(value: waitSeconds, in: 0.5...60, step: 0.5) {
                 Text("\(waitSeconds.wrappedValue, specifier: "%g") seconds")
@@ -788,6 +822,77 @@ struct PermissionsView: View {
             }
         }
         .padding(.vertical, 14)
+    }
+}
+
+// MARK: - Variables
+
+/// Asks once for every {{variable}} a task uses, then runs it.
+struct VariablesSheet: View {
+    @EnvironmentObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    let pending: AppModel.PendingRun
+    @State private var values: [String: String] = [:]
+
+    private var name: String {
+        model.automations.first { $0.id == pending.automationID }?.name ?? "Task"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Run “\(name)”")
+                .font(.rounded(17, .semibold))
+            Text("Fill these in for this run.")
+                .font(.rounded(12))
+                .foregroundStyle(.secondary)
+                .padding(.top, 4)
+                .padding(.bottom, 16)
+
+            Divider()
+            ForEach(pending.names, id: \.self) { key in
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(key).font(.rounded(12, .medium)).foregroundStyle(.secondary)
+                    TextField("", text: binding(key))
+                        .textFieldStyle(.plain)
+                        .font(.rounded(13))
+                }
+                .padding(.vertical, 12)
+                Divider()
+            }
+
+            HStack {
+                Button("Use a spreadsheet instead…") {
+                    let id = pending.automationID
+                    dismiss()
+                    if let a = model.automations.first(where: { $0.id == id }) {
+                        DispatchQueue.main.async { model.runForEachRow(a) }
+                    }
+                }
+                .buttonStyle(.plain)
+                .font(.rounded(12))
+                .foregroundStyle(Color.accentColor)
+                Spacer()
+                Button("Cancel") { model.pendingRun = nil }
+                    .buttonStyle(QuietButtonStyle(compact: true))
+                    .keyboardShortcut(.cancelAction)
+                Button {
+                    model.runPending(values: values)
+                } label: {
+                    Label("Run", systemImage: "play.fill").labelStyle(.titleAndIcon)
+                }
+                .buttonStyle(PrimaryButtonStyle(compact: true))
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(.top, 18)
+        }
+        .padding(26)
+        .frame(width: 440)
+        .fontDesign(.rounded)
+        .onAppear { values = model.lastValues[pending.automationID] ?? [:] }
+    }
+
+    private func binding(_ key: String) -> Binding<String> {
+        Binding(get: { values[key] ?? "" }, set: { values[key] = $0 })
     }
 }
 
