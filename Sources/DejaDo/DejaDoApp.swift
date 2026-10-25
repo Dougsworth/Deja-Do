@@ -36,8 +36,12 @@ struct MenuBarLabel: View {
             .task {
                 guard !Self.openedAtLaunch else { return }
                 Self.openedAtLaunch = true
-                openWindow(id: "main")
+                // Opening in the same instant the menu bar item appears can
+                // leave the window blank, so come forward first and give the
+                // scene a moment to finish setting up.
                 NSApp.activate(ignoringOtherApps: true)
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                openWindow(id: "main")
             }
     }
 
