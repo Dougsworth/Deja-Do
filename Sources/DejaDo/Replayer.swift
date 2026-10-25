@@ -582,9 +582,15 @@ final class Replayer: @unchecked Sendable {
         if (target.inMenu || role.hasPrefix("AXMenu")), button == .left, actions.contains(kAXPressAction) {
             if AX.perform(el, kAXPressAction) { return true }
         }
-        if actions.contains("AXScrollToVisible") {
+        if actions.contains("AXScrollToVisible"), let f = AX.frame(el), let wf = match.windowFrame,
+           !wf.insetBy(dx: 2, dy: 2).contains(CGPoint(x: f.midX, y: f.midY)) {
             AX.perform(el, "AXScrollToVisible")
-            usleep(250_000)
+            // Wait for the scroll, which browsers animate, to actually bring it in.
+            for _ in 0..<10 {
+                usleep(100_000)
+                if let now = AX.frame(el), wf.insetBy(dx: 2, dy: 2).contains(CGPoint(x: now.midX, y: now.midY)) { break }
+            }
+            usleep(150_000)
         }
         guard let f = AX.frame(el), f.width > 0, f.height > 0, f.minX.isFinite, f.minY.isFinite else {
             if actions.contains(kAXPressAction), AX.perform(el, kAXPressAction) { return true }

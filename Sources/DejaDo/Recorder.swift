@@ -375,10 +375,22 @@ final class Recorder: @unchecked Sendable {
             if case .type(let text, let ask, let secret, _) = $0.kind, !ask, !secret { return text }
             return nil
         }
-        for pair in checkPairs {
+        for (k, pair) in checkPairs.enumerated() {
             guard let before = reads[pair.before]?.state, let after = reads[pair.after]?.state,
                   let i = steps.firstIndex(where: { $0.id == pair.stepID }) else { continue }
-            let e = StepExpectation.derive(before: before, after: after, typed: typed)
+            // Clicking into a field only moves focus. What it brings up (a
+            // browser's autofill list, suggestions) comes and goes on its own,
+            // and whether the typing then lands is checked separately.
+            if case .click(let t, _, _, _) = steps[i].kind, AX.editableRoles.contains(t.role) || t.role == "AXSearchField" {
+                steps[i].expect = nil
+                steps[i].noEffect = nil
+                continue
+            }
+            var e = StepExpectation.derive(before: before, after: after, typed: typed)
+            // Text that had gone again by the next action was never a result to wait for.
+            if k + 1 < checkPairs.count, let later = reads[checkPairs[k + 1].before]?.state, later.bundleID == after.bundleID {
+                e = e.droppingTransient(goneBy: later)
+            }
             // Nothing changed when recording, so there is nothing to confirm on a run.
             steps[i].expect = e.changed ? e : nil
             steps[i].noEffect = e.changed ? nil : true

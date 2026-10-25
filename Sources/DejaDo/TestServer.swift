@@ -20,7 +20,7 @@ final class TestServer: @unchecked Sendable {
         case move
         /// The form only appears 2.5 seconds after the page loads.
         case delay
-        /// A cookie banner covers the Submit button until "Got it" is clicked.
+        /// A cookie banner covers the fields and the Submit button until "Got it" is clicked.
         case banner
         /// A tall block pushes the form below the fold.
         case offscreen
@@ -195,7 +195,7 @@ final class TestServer: @unchecked Sendable {
         let lookalike = b.contains(.lookalike)
             ? "<button type=button id=feedback onclick=\"send('feedback')\">Submit feedback</button>" : ""
         let banner = b.contains(.banner) ? """
-            <div id=banner style="position:fixed;left:0;right:0;bottom:0;background:#222;color:#fff;padding:28px 24px;font-size:17px;display:flex;justify-content:space-between;align-items:center;z-index:9">
+            <div id=banner style="position:fixed;left:0;right:0;top:140px;height:260px;background:#222;color:#fff;padding:28px 24px;font-size:17px;display:flex;justify-content:space-between;align-items:center;z-index:9">
               <span>We use cookies to make this page work.</span>
               <button type=button onclick="send('gotit');document.getElementById('banner').remove()" style="font-size:17px;padding:10px 20px">Got it</button>
             </div>

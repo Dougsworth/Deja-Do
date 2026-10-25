@@ -295,4 +295,32 @@ final class PixelChangeTests: XCTestCase {
         for i in stride(from: 0, to: after.pixels.count, by: 3) { after.pixels[i] = 238 }
         XCTAssertEqual(before.changedFraction(from: after), 0)
     }
+
+    func testTextGoneByTheNextActionIsNotExpected() {
+        let before = ScreenState(bundleID: "com.apple.Safari", texts: [SeenText("Name"), SeenText("Email")])
+        let after = ScreenState(bundleID: "com.apple.Safari", texts: [
+            SeenText("Name"), SeenText("Email"), SeenText("Manage your Apple Account"), SeenText("Hide My Email")])
+        let later = ScreenState(bundleID: "com.apple.Safari", texts: [SeenText("Name"), SeenText("Email")])
+        let e = StepExpectation.derive(before: before, after: after)
+        XCTAssertEqual(e.appeared.count, 2)
+        let kept = e.droppingTransient(goneBy: later)
+        XCTAssertTrue(kept.appeared.isEmpty, "autofill suggestions that closed on their own aren't a result")
+        XCTAssertTrue(kept.changed, "the step still did something")
+
+        // A menu the next step clicks in is still open at the next action, so it stays.
+        let menuAfter = ScreenState(bundleID: "com.app", texts: [SeenText("File"), SeenText("Save As…"), SeenText("Export…")])
+        let menuLater = menuAfter
+        let m = StepExpectation.derive(before: ScreenState(bundleID: "com.app", texts: [SeenText("File")]), after: menuAfter)
+        XCTAssertEqual(m.droppingTransient(goneBy: menuLater).appeared.count, 2)
+    }
+
+    func testFailedCheckSaysWhatShowedInstead() {
+        let e = StepExpectation(appeared: [ExpectedText("Thanks, Ana")], changed: true)
+        let before = ScreenState(texts: [SeenText("Submit")])
+        let after = ScreenState(texts: [SeenText("Submit"), SeenText("Send this request?"), SeenText("Confirm")])
+        let r = StepVerifier.check(e, before: before, after: after)
+        XCTAssertEqual(r.verdict, .failed)
+        XCTAssertTrue(r.summary.contains("Instead saw"), r.summary)
+        XCTAssertTrue(r.summary.contains("Send this request?"), r.summary)
+    }
 }

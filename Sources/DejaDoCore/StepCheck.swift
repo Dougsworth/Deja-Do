@@ -138,6 +138,17 @@ public struct StepExpectation: Codable, Equatable {
         return e
     }
 
+    /// Drops text that had already gone again by the time of the next action.
+    /// A browser's autofill list, a tooltip, a "Saved" toast: they show up after
+    /// a step and vanish on their own, so a run can't be expected to catch them.
+    /// A menu or dialog that the next step acts on is still open at that point,
+    /// so those stay.
+    public func droppingTransient(goneBy later: ScreenState) -> StepExpectation {
+        var e = self
+        e.appeared.removeAll { later.count(of: $0.text) == 0 }
+        return e
+    }
+
     /// Works out what a step did by comparing the screen before and after it.
     /// - Parameter typed: text typed during the recording. Expected text that
     ///   contains it is marked, so runs that type something else can skip it.
@@ -335,7 +346,15 @@ public enum StepVerifier {
                                    summary: "Partly matched, didn't see \(list)")
         }
         return StepCheckResult(verdict: .failed, score: score, missing: missing, nothingHappened: nothing,
-                               summary: "Expected \(list) after this step, but didn't see it")
+                               summary: "Expected \(list) after this step, but didn't see it\(insteadSaw(before: before, after: after))")
+    }
+
+    /// What did show up instead, so a person can see at a glance what the app
+    /// did (an error, a different dialog) without opening it.
+    static func insteadSaw(before: ScreenState?, after: ScreenState) -> String {
+        guard let before else { return "" }
+        let fresh = StepExpectation.derive(before: before, after: after).appeared.prefix(3).map { "“\($0.text.prefix(40))”" }
+        return fresh.isEmpty ? "" : ". Instead saw \(fresh.joined(separator: ", "))"
     }
 
     /// 1 when the text newly showed up, or was already showing right where
