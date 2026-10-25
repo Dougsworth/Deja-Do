@@ -67,11 +67,16 @@ fi
 
 echo "Built $APP"
 if [ "${1:-}" = "run" ]; then
-  # Install to ~/Applications so Spotlight and Launchpad can find it too.
+  # Install to /Applications, where Spotlight, Launchpad and other tools look
+  # first. Falls back to ~/Applications if this account can't write there.
   pkill -x DejaDo 2>/dev/null || true
-  mkdir -p "$HOME/Applications"
-  rm -rf "$HOME/Applications/Deja Do.app"
-  cp -R "$APP" "$HOME/Applications/"
-  echo "Installed to ~/Applications/Deja Do.app"
-  open "$HOME/Applications/Deja Do.app"
+  DEST="/Applications"
+  [ -w "$DEST" ] || DEST="$HOME/Applications"
+  mkdir -p "$DEST"
+  rm -rf "$DEST/Deja Do.app"
+  cp -R "$APP" "$DEST/"
+  # An older copy in the other folder would show up twice in Spotlight.
+  if [ "$DEST" = "/Applications" ] && [ -d "$HOME/Applications/Deja Do.app" ]; then rm -rf "$HOME/Applications/Deja Do.app"; fi
+  echo "Installed to $DEST/Deja Do.app"
+  open "$DEST/Deja Do.app"
 fi
