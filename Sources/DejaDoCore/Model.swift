@@ -62,6 +62,10 @@ public struct ElementLocator: Codable, Equatable {
     /// A picture of the spot and the text around it, for apps that don't
     /// describe their buttons. Optional so older automations still load.
     public var visual: VisualTarget?
+    /// What the element was when first recorded. Self healing may update the
+    /// fields above, but a repair is only accepted while it still matches this,
+    /// so many small repairs can't drift the step onto a different button.
+    public var original: OriginalIdentity?
 
     public init(bundleID: String, appName: String, windowTitle: String?, role: String, subrole: String?,
                 title: String?, desc: String?, identifier: String?, help: String?, value: String?,
@@ -93,6 +97,9 @@ public struct ElementLocator: Codable, Equatable {
         [identifier, title, desc, label].contains { !($0 ?? "").isEmpty }
     }
 
+    /// The identity to hold repairs to: the original if one was kept, else this locator.
+    public var identity: OriginalIdentity { original ?? OriginalIdentity(self) }
+
     /// The recorded element as a snapshot, so it can be compared like any candidate.
     public var snapshot: ElementSnapshot {
         ElementSnapshot(role: role, subrole: subrole, title: title, desc: desc, identifier: identifier,
@@ -113,13 +120,28 @@ public struct Step: Identifiable, Codable, Equatable {
     public var expect: StepExpectation?
     /// What to do when the screen doesn't change the way it did. nil means the default.
     public var onMismatch: MismatchPolicy?
+    /// Set by the person to override the guess about whether this step sends,
+    /// saves or deletes something. nil means use the guess.
+    public var risk: StepRisk?
+    /// For typing steps: the name of the field typed into, like "Subject".
+    public var fieldLabel: String?
+    /// Skipped when the task runs, without deleting it.
+    public var disabled: Bool?
+    /// Recording looked before and after this step and saw nothing change.
+    public var noEffect: Bool?
 
-    public init(id: UUID = UUID(), kind: Kind, expect: StepExpectation? = nil, onMismatch: MismatchPolicy? = nil) {
+    public init(id: UUID = UUID(), kind: Kind, expect: StepExpectation? = nil, onMismatch: MismatchPolicy? = nil,
+                risk: StepRisk? = nil, fieldLabel: String? = nil, disabled: Bool? = nil) {
         self.id = id
         self.kind = kind
         self.expect = expect
         self.onMismatch = onMismatch
+        self.risk = risk
+        self.fieldLabel = fieldLabel
+        self.disabled = disabled
     }
+
+    public var isEnabled: Bool { disabled != true }
 
     public enum Kind: Codable, Equatable {
         case activate(bundleID: String, name: String)
@@ -143,6 +165,14 @@ public struct Automation: Identifiable, Codable, Equatable {
     public var lastSucceeded: Bool?
     /// How long the most recent run took, in seconds.
     public var lastDuration: Double?
+    /// What the task is for, in the person's words. Given to AI repair and to exported skills.
+    public var goal: String?
+    /// Dialogs that sometimes get in the way, and how to close them.
+    public var popups: [PopupRule]?
+    /// File format, so a newer Deja Do's files fail clearly instead of half loading.
+    public var format: Int?
+
+    public static let currentFormat = 2
 
     public init(id: UUID = UUID(), name: String, steps: [Step], created: Date = Date(),
                 lastRun: Date? = nil, runs: Int = 0, repairs: Int = 0,
@@ -269,26 +299,57 @@ public struct Persistence {
 
     private func url(_ id: UUID) -> URL { dir.appendingPathComponent("\(id.uuidString).json") }
 
-    public func loadAll() -> [Automation] {
-        let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+    public func loadAll() -> [Automation] { scan().automations }
+
+    /// Every saved task, plus a plain description of any file that couldn't be
+    /// read, instead of letting a damaged task silently disappear. Damaged files
+    /// are left exactly as they are. (Pattern from MacTape's WorkflowStore, MIT.)
+    public func scan() -> (automations: [Automation], problems: [String]) {
+        let fm = FileManager.default
+        let files = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.isSymbolicLinkKey])) ?? []
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return files
-            .filter { $0.pathExtension == "json" }
-            .compactMap { try? decoder.decode(Automation.self, from: Data(contentsOf: $0)) }
-            .sorted { $0.created > $1.created }
+        var found: [Automation] = [], problems: [String] = []
+        for file in files where file.pathExtension == "json" {
+            if (try? file.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true {
+                problems.append("\(file.lastPathComponent) is a link, not a task file, so it was skipped.")
+                continue
+            }
+            if let size = (try? fm.attributesOfItem(atPath: file.path))?[.size] as? Int, size > 32_000_000 {
+                problems.append("\(file.lastPathComponent) is too large to be a task.")
+                continue
+            }
+            do {
+                let a = try decoder.decode(Automation.self, from: Data(contentsOf: file))
+                if (a.format ?? 1) > Automation.currentFormat {
+                    problems.append("“\(a.name)” was saved by a newer Deja Do. Update the app to open it.")
+                    continue
+                }
+                found.append(a)
+            } catch {
+                problems.append("\(file.lastPathComponent) couldn't be read and was left untouched.")
+            }
+        }
+        return (found.sorted { $0.created > $1.created }, problems)
     }
 
-    public func save(_ a: Automation) {
+    /// Saves a task. Returns false if it couldn't be written.
+    @discardableResult
+    public func save(_ a: Automation) -> Bool {
+        var copy = a
+        copy.format = Automation.currentFormat
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
-        if let data = try? encoder.encode(a) {
-            try? data.write(to: url(a.id), options: .atomic)
-        }
+        guard let data = try? encoder.encode(copy) else { return false }
+        return (try? data.write(to: url(a.id), options: .atomic)) != nil
     }
 
+    /// Moves a task to the Trash, so a mistaken delete can be undone in Finder.
     public func delete(_ id: UUID) {
+        #if os(macOS)
+        if (try? FileManager.default.trashItem(at: url(id), resultingItemURL: nil)) != nil { return }
+        #endif
         try? FileManager.default.removeItem(at: url(id))
     }
 }

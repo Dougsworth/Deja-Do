@@ -385,23 +385,10 @@ public enum StepVerifier {
         return TextSimilarity.editRatio(a, b) >= 0.9 || (TextSimilarity.similarity(a, b) ?? 0) >= 0.93
     }
 
-    private static let timePattern = try! NSRegularExpression(
-        pattern: #"^(\d{1,2}[:.]\d{2}(\s?[ap]\.?m\.?)?|\d+\s?(s|m|h|d|w|sec|secs|min|mins|hr|hrs|minutes?|hours?|days?|weeks?)(\s+ago)?)$"#,
-        options: [.caseInsensitive])
-    private static let volatileWords: Set<String> = [
-        "now", "just now", "today", "yesterday", "typing", "online", "offline", "loading", "please wait",
-        "sending", "sent", "delivered", "read", "seen", "connecting", "updating"
-    ]
-
     /// Text that changes by itself and says nothing about whether a step
-    /// worked: clocks, "2 min ago", "typing…", counters, spinners.
+    /// worked: clocks, "2 min ago", "typing…", counters, recent dates.
     public static func isVolatile(_ text: String) -> Bool {
-        let key = TextSimilarity.normalize(text)
-        guard key.count >= 2, text.count <= 80 else { return true }
-        guard key.unicodeScalars.contains(where: { CharacterSet.letters.contains($0) }) else { return true }
-        if volatileWords.contains(key) || key.hasPrefix("last seen") || key.hasPrefix("loading") { return true }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return timePattern.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)) != nil
+        Volatility.isVolatile(text)
     }
 }
 
@@ -423,14 +410,17 @@ public struct StepCheckLoop {
 
     public let policy: MismatchPolicy
     public let canRedo: Bool
+    /// Risky steps (send, save, delete) are never repeated, and a half match stops instead of carrying on.
+    public let risky: Bool
     public var maxRechecks = 3
     public var maxRedos = 1
     public private(set) var rechecks = 0
     public private(set) var redos = 0
 
-    public init(policy: MismatchPolicy, canRedo: Bool) {
+    public init(policy: MismatchPolicy, canRedo: Bool, risky: Bool = false) {
         self.policy = policy
-        self.canRedo = canRedo
+        self.canRedo = canRedo && !risky
+        self.risky = risky
     }
 
     public mutating func next(_ r: StepCheckResult) -> Action {
@@ -439,6 +429,9 @@ public struct StepCheckLoop {
             return .proceed(note: redos > 0 ? "Worked on the second try" : nil)
         case .uncertain:
             if rechecks < maxRechecks { return recheck() }
+            if risky && policy != .keepGoing {
+                return .stop("\(r.summary). This step sends, saves or deletes, so Deja Do won't guess")
+            }
             return .proceed(note: r.summary)
         case .failed:
             if rechecks < maxRechecks { return recheck() }
