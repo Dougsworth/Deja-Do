@@ -30,42 +30,46 @@ enum AppsSelfTest {
     static func electron(_ log: SelfTest.Log) async {
         let me = ProcessInfo.processInfo.processIdentifier
         let running = NSWorkspace.shared.runningApplications.filter { app in
-            guard app.processIdentifier != me, app.activationPolicy == .regular, let url = app.bundleURL else { return false }
-            let framework = url.appendingPathComponent("Contents/Frameworks/Electron Framework.framework")
-            return FileManager.default.fileExists(atPath: framework.path)
+            guard app.processIdentifier != me, app.activationPolicy == .regular, let id = app.bundleIdentifier else { return false }
+            return AX.isElectron(id)
         }
-        // Prefer one with a window open: an app sitting in the Dock with none has nothing to read.
-        func windowCount(_ a: NSRunningApplication) -> Int {
+        func windows(_ a: NSRunningApplication) -> [AXUIElement] {
             let e = AXUIElementCreateApplication(a.processIdentifier)
             AXUIElementSetMessagingTimeout(e, 0.5)
-            return AX.elements(AX.raw(e, kAXWindowsAttribute)).count
+            return AX.elements(AX.raw(e, kAXWindowsAttribute))
         }
-        let withWindows = running.filter { windowCount($0) > 0 }
-        guard let app = withWindows.first ?? running.first, let id = app.bundleIdentifier else {
-            log.check("An Electron app describes its buttons once asked", true, "no Electron app running, skipped", counted: false)
-            return
-        }
-        let el = AXUIElementCreateApplication(app.processIdentifier)
-        AXUIElementSetMessagingTimeout(el, 1.0)
-        AX.wake(app: el, bundleID: id)
-        let windows = AX.elements(AX.raw(el, kAXWindowsAttribute))
-        guard !windows.isEmpty else {
+        let candidates = running.filter { !windows($0).isEmpty }
+        guard !candidates.isEmpty else {
+            let names = running.compactMap(\.localizedName).joined(separator: ", ")
             log.check("An Electron app describes its buttons once asked", true,
-                      "\(app.localizedName ?? id) is running without a window, skipped", counted: false)
+                      running.isEmpty ? "no Electron app running, skipped" : "\(names) running without a window, skipped", counted: false)
             return
         }
-        var labelled = 0, total = 0
-        let deadline = Date().addingTimeInterval(6)
-        repeat {
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            guard let window = AX.element(el, kAXFocusedWindowAttribute) ?? AX.elements(AX.raw(el, kAXWindowsAttribute)).first else { continue }
-            let found = AX.collect(from: window, origin: nil, limit: 1500) { AX.actionableRoles.contains($0) }
-            total = found.count
-            labelled = found.filter { ($0.node.label ?? "").count >= 2 }.count
-            if labelled >= 5 { break }
-        } while Date() < deadline
-        log.check("An Electron app describes its buttons once asked", labelled >= 5,
-                  "\(app.localizedName ?? id): \(windows.count) windows, \(total) controls, \(labelled) with names")
+        var results: [String] = []
+        var anyGood = false
+        for app in candidates.prefix(4) {
+            guard let id = app.bundleIdentifier else { continue }
+            let el = AXUIElementCreateApplication(app.processIdentifier)
+            AXUIElementSetMessagingTimeout(el, 1.0)
+            AX.wake(app: el, bundleID: id)
+            var labelled = 0, total = 0
+            let deadline = Date().addingTimeInterval(6)
+            repeat {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                // Every window, since the focused one may be a tiny status popover.
+                total = 0; labelled = 0
+                for w in AX.elements(AX.raw(el, kAXWindowsAttribute)) {
+                    let found = AX.collect(from: w, origin: nil, limit: 1500) { AX.actionableRoles.contains($0) }
+                    total += found.count
+                    labelled += found.filter { ($0.node.label ?? "").count >= 2 }.count
+                }
+                if labelled >= 5 { break }
+            } while Date() < deadline
+            let good = labelled >= 5
+            anyGood = anyGood || good
+            results.append("\(app.localizedName ?? id) \(labelled) of \(total) named\(good ? "" : " ✗")")
+        }
+        log.check("An Electron app describes its buttons once asked", anyGood, results.joined(separator: " · "))
     }
 
     // MARK: TextEdit
