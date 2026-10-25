@@ -38,7 +38,10 @@ enum AppsSelfTest {
             AXUIElementSetMessagingTimeout(e, 0.5)
             return AX.elements(AX.raw(e, kAXWindowsAttribute))
         }
-        let candidates = running.filter { !windows($0).isEmpty }
+        // Electron only builds the tree for a window that can be seen, so minimised ones don't count.
+        let candidates = running.filter { a in
+            windows(a).contains { (AX.raw($0, kAXMinimizedAttribute) as? Bool) != true }
+        }
         guard !candidates.isEmpty else {
             let names = running.compactMap(\.localizedName).joined(separator: ", ")
             log.check("An Electron app describes its buttons once asked", true,
