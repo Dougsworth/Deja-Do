@@ -82,6 +82,31 @@ On a run, the screen is read before and after each of those steps and compared. 
 
 Only a few short labels are kept for this, never a copy of the screen. When a task types from {{variables}} or asks each run, text that came from typing isn't expected to show up again.
 
+## Safety
+
+Deja Do assumes a run can go wrong and is built to stop cleanly rather than guess.
+
+- **Risky steps.** Clicks on Send, Save, Submit, Delete, Pay and the like, Return after typing, ⌘S and ⌘⌫ are marked as risky (you can change it per step). A risky step is never repeated, never clicked by its old position, never clicked from a picture match alone, and an AI pick for one is confirmed with you first. Settings can also ask before every risky step.
+- **The right app, every time.** Before each click and key press, the app the step belongs to must be in front. If something else jumped in, it's brought back once; if that fails, the run stops before sending anything. Typing stops mid word if focus is lost.
+- **Nothing in the way.** Right before a click, Deja Do checks what's under the pointer. If a banner, popover or sheet covers the target, it waits, looks again once, then stops.
+- **Typing that landed.** After typing, the field is read back. Nothing arrived: typed once more. Part arrived: stop, so it isn't typed twice.
+- **Repairs can't drift.** Self healing and AI fixes are held to what the step was first recorded as, so many small repairs can't walk a step onto a different button. AI fixes can be undone from the step's menu.
+- **Clear endings.** Each run ends saying whether anything was sent or saved before it stopped. Spreadsheet runs offer to continue from the right row, skipping a row that may already have gone through.
+- **Partial scans aren't trusted.** Reading a window has a time limit and a node limit; a match from a scan that was cut short isn't treated as certain.
+- **Saved tasks never vanish quietly.** Damaged or newer-format task files are reported and left untouched, imported files are checked first, and deleting moves a task to the Trash.
+
+## Help while editing
+
+- **Check** looks for every button on screen without clicking or typing anything.
+- **Variables** are suggested from the name of the field you typed into, or from what the value looks like (email, date, amount, phone).
+- **Tidying**: clicks that changed nothing and stray ⌘Tab at the end are pointed out, never removed on their own.
+- **Popups**: when something like "What's New" blocks a run, click "Something in the way?" and close it once; Deja Do closes it whenever it shows up after that.
+- **Scrolling**: when a button isn't visible, the list it was recorded in is scrolled until it shows up.
+- **Run history** keeps the last 30 runs of each task: what each step did, never what was typed.
+- **Agent skills**: add a task as a skill for Claude Code and Codex. Agents run it through a `dejado://run?task=…` link, which asks you first unless you allow other apps in Settings.
+
+Ideas and some rules here come from [OpenAdapt](https://github.com/OpenAdaptAI/OpenAdapt) and [MacTape](https://github.com/jovial-liu/MacTape) (both MIT, credited in the code) and [open-record-replay](https://github.com/video-db/open-record-replay) (ideas only).
+
 ## AI repair
 
 Pick the AI service in Settings:
