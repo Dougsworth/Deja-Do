@@ -11,11 +11,17 @@ You need Xcode or the Xcode command line tools (`xcode-select --install`).
 ```bash
 ./build.sh run     # build "Deja Do.app" and open it
 ./build.sh test    # run the matching engine's tests
-./build.sh selftest   # drive Calculator end to end with real clicks (results in self-test.txt)
+./build.sh selftest   # drive Calculator, a web form in Safari and TextEdit with real clicks (results in self-test.txt)
 ./build.sh release    # sign with Developer ID, notarize, and zip it to send to people
 ```
 
-The self test records 7 + 8 = in Calculator, replays it, replays it in the Scientific layout, checks that a step whose screen doesn't match stops the run without repeating itself, and, with Screen Recording on, replays from the screen alone after the window moves. Keep hands off the mouse for about a minute while it runs. `./build.sh watch` waits for a `.selftest-request` file in the folder and runs the self test each time one appears, so changes can be tested without anyone at the keyboard.
+The self test drives real apps with real mouse and keyboard events. Keep hands off for about seven minutes. `SUITE=calculator`, `SUITE=web` or `SUITE=apps` runs one part.
+
+- **Calculator.** Records 7 + 8 =, replays it as recorded, in the Scientific layout, after the window moves, and from the screen alone. Checks that a step whose screen doesn't match stops without repeating, that another app jumping in front is handled, and that Esc stops a long wait at once.
+- **Web form.** Deja Do serves itself a small form and opens it in Safari. The page can break itself the ways real sites do, and it counts every real submission, so "sent exactly once" is proven rather than assumed. One recording is replayed against fourteen versions: unchanged, button renamed, button relabelled to a different word, fields reordered and button moved, form loading late, result showing slowly, form below the fold, DOM ids random on each load, a lookalike button beside the real one, a cookie banner over the form (before and after Deja Do is shown how to close it), a new confirm dialog, all of the above at once, and the same form on a different website. Each must submit exactly once with the right values or stop with nothing sent. Submitting twice fails the whole run.
+- **Desktop apps.** Records typing and ⌘S in TextEdit, replays it into a new document (the text must land once), and checks a ⌘S whose result doesn't match stops without being pressed again. Also checks that a running Electron app describes its buttons once asked.
+
+`./build.sh watch` waits for a `.selftest-request` file in the folder (its contents can name a suite) and runs the self test each time one appears, so changes can be tested without anyone at the keyboard.
 
 Look for the ↻ icon in the menu bar. You can also open `Package.swift` in Xcode to edit and debug.
 
@@ -93,7 +99,16 @@ Deja Do assumes a run can go wrong and is built to stop cleanly rather than gues
 - **Repairs can't drift.** Self healing and AI fixes are held to what the step was first recorded as, so many small repairs can't walk a step onto a different button. AI fixes can be undone from the step's menu.
 - **Clear endings.** Each run ends saying whether anything was sent or saved before it stopped. Spreadsheet runs offer to continue from the right row, skipping a row that may already have gone through.
 - **Partial scans aren't trusted.** Reading a window has a time limit and a node limit; a match from a scan that was cut short isn't treated as certain.
+- **Same website only.** A step recorded on a web page remembers the site. If the browser is on a different site, the run stops rather than click a page that only looks the same.
 - **Saved tasks never vanish quietly.** Damaged or newer-format task files are reported and left untouched, imported files are checked first, and deleting moves a task to the Trash.
+
+## Web pages
+
+Safari, Chrome, Edge, Brave, Arc and Electron apps are read through the same Accessibility interface as native apps, once Deja Do asks them to switch it on. Each control's DOM id is used like an app's own identifier, so a button that is renamed or relabelled is still found. Ids that web frameworks make up at load time (`mui-12`, `:r3:`, `field-482`) are recognised and ignored. Popups that come and go on their own, like a browser's autofill list, are never taken as a step's result.
+
+## Repair records
+
+Every time finding a step wasn't straightforward (a control was healed, AI picked one, it was found from the screen, it was clicked by position, or it wasn't found), Deja Do notes how the control was described then and now, and how each matching signal scored. Never typed text or field contents. The file stays on the Mac at `~/Library/Application Support/Deja Do/repairs.jsonl`, keeps the newest 5,000, and can be saved from Settings. It is the data the matcher's thresholds and weights get tuned from.
 
 ## Help while editing
 
@@ -131,6 +146,10 @@ Keys are kept in the keychain. Only a text list of the window's elements is sent
 | `Sources/DejaDoCore/TemplateSearch.swift` | Coarse to fine picture matching |
 | `Sources/DejaDoCore/GrayImage.swift` | Small greyscale pictures, resizing and filters |
 | `Sources/DejaDoCore/StepCheck.swift` | What a step changed, checking it on a run, retry decisions |
+| `Sources/DejaDoCore/Risk.swift`, `Safety.swift` | Risky steps, typing checks, repair guard, how a run ended |
+| `Sources/DejaDoCore/Corpus.swift` | Repair records |
+| `Sources/DejaDo/SelfTest.swift`, `WebSelfTest.swift`, `AppsSelfTest.swift` | End to end tests on Calculator, Safari and TextEdit |
+| `Sources/DejaDo/TestServer.swift` | The breakable web form the web test uses |
 | `Sources/DejaDoCore/Settle.swift` | Knowing when a window has finished changing |
 | `Sources/DejaDoCore/Model.swift` | Steps, automations, saving |
 | `Sources/DejaDo/AX.swift` | Accessibility: batched attribute reads, tree walks, recording anchors |
@@ -141,7 +160,7 @@ Keys are kept in the keychain. Only a text list of the window's elements is sent
 | `Sources/DejaDo/AIRepair.swift` | The question sent to the AI |
 | `server/` | The Deja Do AI server for Dokploy |
 | `Sources/DejaDo/ScreenVision.swift` | ScreenCaptureKit capture, Vision text reading, before and after reads |
-| `Tests/DejaDoCoreTests` | Engine, vision and step checking tests. They also run on Linux |
+| `Tests/DejaDoCoreTests` | 141 engine, vision, step checking and safety tests. They also run on Linux |
 
 Automations are saved as JSON in `~/Library/Application Support/Deja Do/Automations`. Anything recorded while the app was called Once is copied over on first launch.
 
