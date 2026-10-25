@@ -184,6 +184,16 @@ public struct MatchEngine {
         let margin = top.score - (runnerUp?.score ?? 0)
         if top.score >= acceptScore && margin >= requiredMargin / 2 { return .confident(top) }
         if top.score >= acceptWithMargin && margin >= requiredMargin { return .confident(top) }
+        // The only control with exactly this label and this kind of role is it,
+        // however far the layout moved it. A reflowed page or a resized window
+        // changes position, path and neighbours all at once, but not the label.
+        if (top.features[.text] ?? 0) >= 0.97, (top.features[.role] ?? 0) >= 0.85, top.score >= plausibleScore,
+           !ranked.dropFirst().contains(where: {
+               (($0.features[.text] ?? 0) >= 0.9) && (($0.features[.role] ?? 0) > 0)
+                   && !Self.sameTarget(candidates[top.index], candidates[$0.index])
+           }) {
+            return .confident(top)
+        }
         if top.score >= plausibleScore { return .ambiguous(Array(ranked.prefix(ambiguousTopK))) }
         return .notFound(Array(ranked.prefix(150)))
     }

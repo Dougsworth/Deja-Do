@@ -58,6 +58,32 @@ final class MatchEngineTests: XCTestCase {
         XCTAssertEqual(best.index, 0)
     }
 
+    func testOnlyButtonWithThatLabelIsFoundWhereverItMoved() {
+        // A page reflowed: the button moved from the bottom left to the top
+        // right, its tree path and neighbours changed, but it's still the one
+        // control labelled "Submit".
+        let target = locator(label: "Submit", center: CGPoint(x: 80, y: 500),
+                             path: [PathStep(role: "AXGroup", index: 0), PathStep(role: "AXGroup", index: 2), PathStep(role: "AXButton", index: 0)],
+                             anchors: [Anchor(label: "Email", role: "AXStaticText", offset: CGPoint(x: 0, y: -60))],
+                             window: CGSize(width: 900, height: 700))
+        let report = MatchEngine().match(target, among: [
+            ElementSnapshot(role: "AXStaticText", label: "Email", frame: CGRect(x: 60, y: 300, width: 40, height: 16)),
+            ElementSnapshot(role: "AXStaticText", label: "Name", frame: CGRect(x: 60, y: 400, width: 40, height: 16)),
+            ElementSnapshot(role: "AXTextField", label: "Name", frame: CGRect(x: 60, y: 420, width: 300, height: 30)),
+            ElementSnapshot(role: "AXButton", label: "Submit", frame: CGRect(x: 760, y: 120, width: 90, height: 32),
+                            path: [PathStep(role: "AXGroup", index: 0), PathStep(role: "AXGroup", index: 0), PathStep(role: "AXGroup", index: 1), PathStep(role: "AXButton", index: 0)])
+        ], windowSize: CGSize(width: 900, height: 700))
+        guard case .confident(let best) = report.decision else { return XCTFail("expected confident, got \(report.decision)") }
+        XCTAssertEqual(best.index, 3)
+
+        // With a second "Submit" anywhere, that shortcut must not apply.
+        let twins = MatchEngine().match(target, among: [
+            ElementSnapshot(role: "AXButton", label: "Submit", frame: CGRect(x: 760, y: 120, width: 90, height: 32)),
+            ElementSnapshot(role: "AXButton", label: "Submit", frame: CGRect(x: 760, y: 420, width: 90, height: 32))
+        ], windowSize: CGSize(width: 900, height: 700))
+        if case .confident = twins.decision { XCTFail("two buttons with the same label far from the spot are a guess") }
+    }
+
     func testUnrelatedRenameIsNotTrusted() {
         let target = locator(label: "Send", center: CGPoint(x: 100, y: 100))
         let report = MatchEngine().match(target, among: [

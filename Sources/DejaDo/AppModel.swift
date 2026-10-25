@@ -101,6 +101,8 @@ final class AppModel: ObservableObject, @unchecked Sendable {
     /// Run history sheet.
     @Published var historyFor: UUID?
     let history = RunHistory()
+    /// Where finding a step wasn't straightforward, kept for tuning the matcher.
+    let corpus = RepairCorpus()
 
     private let persistence = Persistence()
     private let weightStore = WeightStore()
@@ -350,7 +352,8 @@ final class AppModel: ObservableObject, @unchecked Sendable {
                 await withCheckedContinuation { cont in
                     DispatchQueue.main.async { cont.resume(returning: Prompt.confirm(question, detail: detail)) }
                 }
-            }
+            },
+            record: { [corpus] r in corpus.add(r) }
         )
         let replayer = self.replayer
         let total = rows.count
@@ -632,6 +635,22 @@ final class AppModel: ObservableObject, @unchecked Sendable {
             status = "Saved \(url.lastPathComponent)."
         } catch {
             status = "Couldn't save: \(error.localizedDescription)"
+        }
+    }
+
+    /// Saves the repair records somewhere the person chooses, as JSON lines.
+    func exportRepairs() {
+        let panel = NSSavePanel()
+        panel.title = "Save repair records"
+        panel.nameFieldStringValue = "dejado-repairs.jsonl"
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
+            try FileManager.default.copyItem(at: corpus.url, to: url)
+            status = "Saved \(url.lastPathComponent)."
+        } catch {
+            status = "Nothing to save yet."
         }
     }
 

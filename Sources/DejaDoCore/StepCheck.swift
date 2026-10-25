@@ -9,10 +9,14 @@ import CoreGraphics
 public struct SeenText: Codable, Equatable {
     public var text: String
     public var frame: CGRect?
+    /// Read from the pixels rather than reported by the app. OCR varies a
+    /// little from one frame to the next, so these are weaker evidence.
+    public var ocr: Bool
 
-    public init(_ text: String, frame: CGRect? = nil) {
+    public init(_ text: String, frame: CGRect? = nil, ocr: Bool = false) {
         self.text = text
         self.frame = frame
+        self.ocr = ocr
     }
 }
 
@@ -59,7 +63,7 @@ public struct ScreenState: Equatable {
         for line in lines {
             let key = TextSimilarity.normalize(line.text)
             guard !key.isEmpty, !fromAX.contains(key) else { continue }
-            texts.append(SeenText(line.text, frame: line.frame))
+            texts.append(SeenText(line.text, frame: line.frame, ocr: true))
         }
         usedOCR = true
     }
@@ -129,6 +133,8 @@ public struct StepExpectation: Codable, Equatable {
 
     public static let maxAppeared = 6
     public static let maxVanished = 3
+    /// This many texts from Accessibility means the app describes itself and OCR is only a backstop.
+    public static let describedWell = 8
 
     /// The same expectation without text that came from typing, for runs
     /// where what gets typed changes ({{variables}}, ask each run).
@@ -154,14 +160,19 @@ public struct StepExpectation: Codable, Equatable {
     ///   contains it is marked, so runs that type something else can skip it.
     public static func derive(before: ScreenState, after: ScreenState, typed: [String] = []) -> StepExpectation {
         let typedKeys = typed.map(TextSimilarity.normalize).filter { $0.count >= 3 }
-        let beforeCounts = counts(before.texts), afterCounts = counts(after.texts)
+        // When the app describes itself, what it says is the evidence. OCR of
+        // the same screen comes out slightly differently each time ("G Google",
+        // "Google"), and treating that jitter as a result makes runs stop for nothing.
+        let describesItself = after.texts.filter { !$0.ocr }.count >= describedWell
+        let usable = { (t: SeenText) in !(describesItself && t.ocr) }
+        let beforeCounts = counts(before.texts.filter(usable)), afterCounts = counts(after.texts.filter(usable))
         // Text that only changed a number ("Inbox 3" → "Inbox 2") is a counter, not a result.
         let goneDigitless = Set(beforeCounts.keys.filter { (afterCounts[$0] ?? 0) == 0 }.map(digitless))
         let newDigitless = Set(afterCounts.keys.filter { (beforeCounts[$0] ?? 0) == 0 }.map(digitless))
 
         var appeared: [(ExpectedText, Double, Int)] = []
         var seen = Set<String>()
-        for (i, t) in after.texts.enumerated() {
+        for (i, t) in after.texts.enumerated() where usable(t) {
             let key = TextSimilarity.normalize(t.text)
             guard !seen.contains(key), !StepVerifier.isVolatile(t.text) else { continue }
             guard (afterCounts[key] ?? 0) > (beforeCounts[key] ?? 0) else { continue }
@@ -179,7 +190,7 @@ public struct StepExpectation: Codable, Equatable {
 
         var vanished: [String] = []
         var seenGone = Set<String>()
-        for t in before.texts {
+        for t in before.texts where usable(t) {
             let key = TextSimilarity.normalize(t.text)
             guard !seenGone.contains(key), !StepVerifier.isVolatile(t.text), t.text.count <= 50 else { continue }
             guard (beforeCounts[key] ?? 0) > 0, (afterCounts[key] ?? 0) == 0 else { continue }
@@ -202,7 +213,7 @@ public struct StepExpectation: Codable, Equatable {
             guard let x = before.thumbnail, let y = after.thumbnail else { return false }
             return x.changedFraction(from: y) > StepVerifier.pixelChange
         }()
-        let textsChanged = beforeCounts != afterCounts
+        let textsChanged = beforeCounts != afterCounts || counts(before.texts) != counts(after.texts)
         let changed = textsChanged || pixelsChanged || title != nil || app != nil
             || TextSimilarity.normalize(before.windowTitle ?? "") != TextSimilarity.normalize(after.windowTitle ?? "")
 

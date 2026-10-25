@@ -40,6 +40,8 @@ final class Replayer: @unchecked Sendable {
         var tuned: (_ bundleID: String, _ weights: MatchWeights) -> Void
         /// Ask the person a yes or no question. Return false to stop.
         var confirm: (_ question: String, _ detail: String) async -> Bool = { _, _ in true }
+        /// A moment where finding a step wasn't straightforward, for the repair corpus.
+        var record: (RepairRecord) -> Void = { _ in }
     }
 
     private let lock = NSLock()
@@ -55,6 +57,7 @@ final class Replayer: @unchecked Sendable {
     /// What each step did this run, joined into one line under the step.
     private(set) var notes: [Int: [String]] = [:]
     private var noteSink: ((Int, String) -> Void)?
+    private var recordSink: ((RepairRecord) -> Void)?
     /// The app the current step is meant for. Input is only sent while it's in front.
     private var expectedApp: (bundleID: String, name: String)?
     private var goal: String?
@@ -69,6 +72,7 @@ final class Replayer: @unchecked Sendable {
         weights = settings.weights
         notes = [:]
         noteSink = callbacks.note
+        recordSink = callbacks.record
         expectedApp = nil
         goal = automation.goal
         guard AXIsProcessTrusted() else {
@@ -171,6 +175,8 @@ final class Replayer: @unchecked Sendable {
                 }
                 try await ensureFront()
                 try await clickPosition(target, button: button, count: count, modifiers: modifiers)
+                callbacks.record(RepairRecord(app: target.bundleID, kind: .position, recorded: .init(target), accepted: true,
+                                              note: lastVisualMiss))
                 note(i, target.visual != nil && settings.visionEnabled
                      ? "Clicked by position: couldn't find it on screen with confidence\(lastVisualMiss.map { " (\($0))" } ?? "")"
                      : "Clicked by position: the app didn't say what was here when recorded")
@@ -370,6 +376,10 @@ final class Replayer: @unchecked Sendable {
                     let evidence = best.parts.sorted { $0.key.rawValue < $1.key.rawValue }
                         .map { "\($0.key.rawValue) \(Int(($0.value * 100).rounded()))" }.joined(separator: ", ")
                     note(stepIndex, "Found on screen \(Self.describe(best, visual)) · \(Int((best.score * 100).rounded()))% match (\(evidence))")
+                    recordSink?(RepairRecord(
+                        app: target.bundleID, kind: .vision, recorded: .init(target),
+                        signals: Dictionary(uniqueKeysWithValues: best.parts.map { ($0.key.rawValue, $0.value) }),
+                        score: best.score, accepted: true, note: Self.describe(best, visual)))
                     return CGPoint(x: wf.minX + best.point.x, y: wf.minY + best.point.y)
                 }
                 if let best = report.best {
@@ -444,12 +454,21 @@ final class Replayer: @unchecked Sendable {
 
     /// Saves a refreshed locator only if it still means the element first recorded.
     private func learn(_ fresh: ElementLocator, from target: ElementLocator, stepIndex: Int, byAI: Bool,
-                       risky: Bool, callbacks: Callbacks) {
-        if let kept = HealGuard.repaired(fresh, from: target, risky: risky) {
+                       risky: Bool, callbacks: Callbacks, signals: FeatureVector = [:], score: Double = 0) {
+        let kept = HealGuard.repaired(fresh, from: target, risky: risky)
+        if let kept {
             callbacks.learned(stepIndex, kept, byAI)
         } else {
             note(stepIndex, "Kept the recorded step: what it found looks different from what was recorded")
         }
+        callbacks.record(RepairRecord(
+            app: target.bundleID, kind: byAI ? .aiPicked : (kept == nil ? .healRefused : .healed),
+            recorded: .init(target),
+            found: .init(fresh), signals: Self.plain(signals), score: score, accepted: kept != nil, risky: risky))
+    }
+
+    static func plain(_ x: FeatureVector) -> [String: Double] {
+        Dictionary(uniqueKeysWithValues: x.map { ($0.key.rawValue, $0.value) })
     }
 
     private func locate(_ target: ElementLocator, stepIndex: Int, risky: Bool, settings: Settings,
@@ -487,6 +506,15 @@ final class Replayer: @unchecked Sendable {
 
         let what = Step(kind: .click(target: target, button: .left, count: 1, modifiers: 0)).summary
         if last?.truncated == true { note(stepIndex, "The window was too big to read completely") }
+        if let top = last?.report.best {
+            callbacks.record(RepairRecord(app: target.bundleID, kind: .notFound, recorded: .init(target),
+                                          found: .init(last!.snapshot(for: top)), signals: Self.plain(top.features),
+                                          score: top.score, accepted: false, risky: risky,
+                                          note: last?.truncated == true ? "window scan was cut short" : lastVisualMiss))
+        } else {
+            callbacks.record(RepairRecord(app: target.bundleID, kind: .notFound, recorded: .init(target), accepted: false,
+                                          risky: risky, note: last == nil ? "no window" : "nothing matchable in the window"))
+        }
         guard settings.aiEnabled else {
             throw ReplayError("Couldn't find “\(what)” with confidence. Turn on AI in Settings to let it look.")
         }
@@ -525,7 +553,8 @@ final class Replayer: @unchecked Sendable {
 
         let el = outcome.element(for: chosen)
         if let updated = AX.makeLocator(for: el, pid: AX.pid(el), clickPoint: nil) {
-            learn(updated, from: target, stepIndex: stepIndex, byAI: true, risky: risky, callbacks: callbacks)
+            learn(updated, from: target, stepIndex: stepIndex, byAI: true, risky: risky, callbacks: callbacks,
+                  signals: chosen.features, score: chosen.score)
         }
         note(stepIndex, "AI picked \(picked): \(choice.reason ?? "")")
         return .element(ElementFinder.Match(element: el, windowFrame: outcome.root.windowFrame))
@@ -537,7 +566,8 @@ final class Replayer: @unchecked Sendable {
         // Self healing: a confident but imperfect match means the element drifted.
         // Remember how it looks now, as long as it's still the same element.
         if best.score < 0.92, let fresh = AX.makeLocator(for: el, pid: AX.pid(el), clickPoint: nil) {
-            learn(fresh, from: target, stepIndex: stepIndex, byAI: false, risky: risky, callbacks: callbacks)
+            learn(fresh, from: target, stepIndex: stepIndex, byAI: false, risky: risky, callbacks: callbacks,
+                  signals: best.features, score: best.score)
         }
         note(stepIndex, "Found \(Self.describe(o.snapshot(for: best))) · \(Int((best.score * 100).rounded()))% match")
         return .element(ElementFinder.Match(element: el, windowFrame: o.root.windowFrame))

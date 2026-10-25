@@ -323,4 +323,19 @@ final class PixelChangeTests: XCTestCase {
         XCTAssertTrue(r.summary.contains("Instead saw"), r.summary)
         XCTAssertTrue(r.summary.contains("Send this request?"), r.summary)
     }
+
+    func testOCRJitterIsNotAResultWhenTheAppDescribesItself() {
+        let ax = (1...10).map { SeenText("Label \($0)") }
+        let before = ScreenState(bundleID: "com.apple.Safari", texts: ax + [SeenText("Google", ocr: true), SeenText("JMMB Moneyline", ocr: true)])
+        let after = ScreenState(bundleID: "com.apple.Safari", texts: ax + [SeenText("G Google", ocr: true), SeenText("M JMMB Moneyline", ocr: true), SeenText("Q Bing", ocr: true)])
+        let e = StepExpectation.derive(before: before, after: after)
+        XCTAssertTrue(e.appeared.isEmpty, "\(e.appeared.map(\.text))")
+        XCTAssertTrue(e.vanished.isEmpty)
+        XCTAssertTrue(e.changed, "the OCR text still shows something moved")
+
+        // An app that says nothing about itself: OCR is all there is, so it counts.
+        let canvasBefore = ScreenState(bundleID: "com.game", texts: [SeenText("Score 10", ocr: true)])
+        let canvasAfter = ScreenState(bundleID: "com.game", texts: [SeenText("Score 10", ocr: true), SeenText("Level complete", ocr: true)])
+        XCTAssertEqual(StepExpectation.derive(before: canvasBefore, after: canvasAfter).appeared.map(\.text), ["Level complete"])
+    }
 }

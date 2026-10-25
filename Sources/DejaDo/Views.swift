@@ -1102,6 +1102,24 @@ struct SettingsView: View {
 
             Divider()
 
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Repair records")
+                        .font(.rounded(13))
+                    Text(model.corpus.summary() + " How controls were described when a step had to be healed, picked by AI, found from the screen or wasn't found. No typed text. Stays on this Mac unless you save it somewhere.")
+                        .font(.rounded(11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 16)
+                Button("Save…") { model.exportRepairs() }
+                    .buttonStyle(QuietButtonStyle(compact: true))
+                    .disabled(model.corpus.count == 0)
+            }
+            .padding(.vertical, 14)
+
+            Divider()
+
             HStack {
                 Text("Esc stops a running task.")
                     .font(.rounded(12))
