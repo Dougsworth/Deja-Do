@@ -180,7 +180,7 @@ extension Step {
 
     public var detail: String? {
         if case .click(let t, _, _, _) = kind {
-            if let w = t.windowTitle, !w.isEmpty { return "\(t.appName), \(w)" }
+            if let w = t.windowTitle, !w.isEmpty, w != t.appName { return "\(t.appName), \(w)" }
             return t.appName
         }
         return nil

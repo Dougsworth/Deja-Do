@@ -5,6 +5,52 @@ import DejaDoCore
 // Layout is built from type, whitespace and hairlines: no tinted cards,
 // no badges, no boxed icons. One accent colour marks what is active.
 
+extension Font {
+    /// SF Pro Rounded: softer and friendlier than the default system face.
+    static func rounded(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
+        .system(size: size, weight: weight, design: .rounded)
+    }
+}
+
+/// The main call to action: solid accent, soft corners, a small press.
+struct PrimaryButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.rounded(14, .semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 9)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.accentColor.opacity(configuration.isPressed ? 0.8 : 1))
+            )
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .opacity(isEnabled ? 1 : 0.45)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+            .contentShape(Rectangle())
+    }
+}
+
+/// Secondary action: a hairline outline, same shape as the primary.
+struct QuietButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.rounded(14, .medium))
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 9)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(configuration.isPressed ? 0.35 : 0.18), lineWidth: 1)
+            )
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+            .contentShape(Rectangle())
+    }
+}
+
 enum Metrics {
     static let sidebarWidth: CGFloat = 248
     static let gutter: CGFloat = 40
@@ -34,6 +80,7 @@ struct MainView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .background(Color(nsColor: .windowBackgroundColor))
+        .fontDesign(.rounded)
         .ignoresSafeArea(.container, edges: .top)
         .sheet(isPresented: $showSettings) {
             SettingsView().environmentObject(model)
@@ -50,7 +97,7 @@ struct Sidebar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Deja Do")
-                .font(.system(size: 13, weight: .semibold))
+                .font(.rounded(13, .semibold))
                 .padding(.horizontal, 20)
                 .padding(.top, Metrics.titleTop)
                 .padding(.bottom, 16)
@@ -101,7 +148,7 @@ struct Sidebar: View {
                 .foregroundStyle(.secondary)
                 .help("Settings")
             }
-            .font(.system(size: 13))
+            .font(.rounded(13))
             .padding(.horizontal, 20)
             .padding(.vertical, 14)
         }
@@ -125,11 +172,11 @@ struct SidebarRow: View {
                     .frame(width: 2)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(automation.name)
-                        .font(.system(size: 13, weight: selected ? .semibold : .regular))
+                        .font(.rounded(13, selected ? .semibold : .regular))
                         .foregroundStyle(selected ? .primary : .secondary)
                         .lineLimit(1)
                     Text(running ? "Running step \(model.runningStep + 1)" : "\(automation.steps.count) steps")
-                        .font(.system(size: 11))
+                        .font(.rounded(11))
                         .foregroundStyle(running ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.tertiary))
                 }
                 .padding(.leading, 18)
@@ -161,27 +208,30 @@ struct AutomationView: View {
             VStack(alignment: .leading, spacing: 8) {
                 TextField("Name", text: $automation.name)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 26, weight: .semibold))
+                    .font(.rounded(26, .semibold))
 
                 Text(meta)
-                    .font(.system(size: 12))
+                    .font(.rounded(12))
                     .foregroundStyle(.secondary)
 
                 HStack(spacing: 14) {
                     if isRunning {
-                        Button("Stop") { model.stopRun() }
-                            .controlSize(.large)
+                        Button { model.stopRun() } label: {
+                            Label("Stop", systemImage: "stop.fill").labelStyle(.titleAndIcon)
+                        }
+                        .buttonStyle(QuietButtonStyle())
                         Text("Step \(model.runningStep + 1) of \(automation.steps.count). Esc also stops it.")
-                            .font(.system(size: 12))
+                            .font(.rounded(12))
                             .foregroundStyle(.secondary)
                     } else {
-                        Button("Run") { model.run(automation) }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.large)
-                            .keyboardShortcut(.return, modifiers: .command)
+                        Button { model.run(automation) } label: {
+                            Label("Run", systemImage: "play.fill").labelStyle(.titleAndIcon)
+                        }
+                        .buttonStyle(PrimaryButtonStyle())
+                        .keyboardShortcut(.return, modifiers: .command)
                             .disabled(model.runningID != nil || model.isRecording)
                         Text("⌘↩")
-                            .font(.system(size: 12))
+                            .font(.rounded(12))
                             .foregroundStyle(.tertiary)
                     }
                 }
@@ -189,7 +239,7 @@ struct AutomationView: View {
 
                 if let status = model.status, isRunning || model.runningID == nil {
                     Text(status)
-                        .font(.system(size: 12))
+                        .font(.rounded(12))
                         .foregroundStyle(.secondary)
                         .lineLimit(3)
                         .padding(.top, 2)
@@ -260,20 +310,20 @@ struct StepLine<Editor: View>: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 14) {
             Text(number.map(String.init) ?? "")
-                .font(.system(size: 12, design: .monospaced))
+                .font(.rounded(12, .medium).monospacedDigit())
                 .foregroundStyle(isCurrent ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.tertiary))
                 .frame(width: 22, alignment: .trailing)
             Image(systemName: symbol)
-                .font(.system(size: 11))
+                .font(.rounded(11))
                 .foregroundStyle(isCurrent ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.tertiary))
                 .frame(width: 14)
             VStack(alignment: .leading, spacing: 4) {
                 Text(summary)
-                    .font(.system(size: 13, weight: isCurrent ? .semibold : .regular))
+                    .font(.rounded(13, isCurrent ? .semibold : .regular))
                     .foregroundStyle(dimmed ? .secondary : .primary)
                 if let detail {
                     Text(detail)
-                        .font(.system(size: 11))
+                        .font(.rounded(11))
                         .foregroundStyle(.secondary)
                 }
                 editor()
@@ -301,20 +351,20 @@ struct StepRow: View {
                 VStack(spacing: 3) {
                     TextField("Text to type", text: typedText)
                         .textFieldStyle(.plain)
-                        .font(.system(size: 12))
+                        .font(.rounded(12))
                         .disabled(askEachRun.wrappedValue)
                     Divider()
                 }
                 .frame(maxWidth: 320)
                 Toggle("Ask each run", isOn: askEachRun)
                     .toggleStyle(.checkbox)
-                    .font(.system(size: 11))
+                    .font(.rounded(11))
             }
             .padding(.top, 4)
         case .wait:
             Stepper(value: waitSeconds, in: 0.5...60, step: 0.5) {
                 Text("\(waitSeconds.wrappedValue, specifier: "%g") seconds")
-                    .font(.system(size: 11))
+                    .font(.rounded(11))
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: 200, alignment: .leading)
@@ -370,21 +420,21 @@ struct RecordingView: View {
                         .opacity(pulse ? 0.25 : 1)
                         .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulse)
                     Text("Recording")
-                        .font(.system(size: 26, weight: .semibold))
+                        .font(.rounded(26, .semibold))
                 }
                 Text("Do the task the way you normally would. Every click, keystroke and app switch becomes a step. Passwords are never recorded.")
-                    .font(.system(size: 13))
+                    .font(.rounded(13))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: 520, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 18) {
-                    Button("Stop and Save") { model.stopRecording() }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
-                        .keyboardShortcut(.return, modifiers: .command)
+                    Button { model.stopRecording() } label: {
+                        Label("Stop and save", systemImage: "stop.fill").labelStyle(.titleAndIcon)
+                    }
+                    .buttonStyle(PrimaryButtonStyle())
+                    .keyboardShortcut(.return, modifiers: .command)
                     Button("Discard") { model.discardRecording() }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
+                        .buttonStyle(QuietButtonStyle())
                 }
                 .padding(.top, 10)
             }
@@ -407,7 +457,7 @@ struct RecordingView: View {
                     }
                     if model.liveSteps.isEmpty && model.pendingText.isEmpty {
                         Text("Waiting for your first click…")
-                            .font(.system(size: 13))
+                            .font(.rounded(13))
                             .foregroundStyle(.tertiary)
                             .padding(.vertical, 14)
                     }
@@ -426,18 +476,19 @@ struct EmptyStateView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Do it once.")
-                .font(.system(size: 30, weight: .semibold))
+                .font(.rounded(30, .semibold))
             Text("Record a boring task, like downloading a report, renaming it and emailing it. Deja Do saves every step and does the whole thing for you from then on. If a button moves or gets renamed, it finds it again.")
-                .font(.system(size: 14))
+                .font(.rounded(14))
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: 480, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 14) {
-                Button("Record a task") { model.startRecording() }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
+                Button { model.startRecording() } label: {
+                    Label("Record a task", systemImage: "record.circle").labelStyle(.titleAndIcon)
+                }
+                .buttonStyle(PrimaryButtonStyle())
                 Text("⌘R")
-                    .font(.system(size: 12))
+                    .font(.rounded(12))
                     .foregroundStyle(.tertiary)
             }
             .padding(.top, 10)
@@ -454,9 +505,9 @@ struct PermissionsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Two permissions first")
-                .font(.system(size: 26, weight: .semibold))
+                .font(.rounded(26, .semibold))
             Text("macOS has to let Deja Do press buttons in other apps, and notice your clicks and keys while you record. Nothing leaves your Mac.")
-                .font(.system(size: 13))
+                .font(.rounded(13))
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: 520, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
@@ -476,7 +527,7 @@ struct PermissionsView: View {
             Divider()
 
             Text("Switch both on in System Settings, then quit and reopen Deja Do. This page updates by itself.")
-                .font(.system(size: 12))
+                .font(.rounded(12))
                 .foregroundStyle(.tertiary)
                 .padding(.top, 18)
         }
@@ -489,18 +540,19 @@ struct PermissionsView: View {
     private func row(_ title: String, detail: String, granted: Bool, action: @escaping () -> Void) -> some View {
         HStack(alignment: .center, spacing: 14) {
             Image(systemName: granted ? "checkmark" : "circle")
-                .font(.system(size: 12, weight: .semibold))
+                .font(.rounded(12, .semibold))
                 .foregroundStyle(granted ? AnyShapeStyle(Color.green) : AnyShapeStyle(.tertiary))
                 .frame(width: 16)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.system(size: 13, weight: .medium))
-                Text(detail).font(.system(size: 12)).foregroundStyle(.secondary)
+                Text(title).font(.rounded(13, .medium))
+                Text(detail).font(.rounded(12)).foregroundStyle(.secondary)
             }
             Spacer()
             if granted {
-                Text("On").font(.system(size: 12)).foregroundStyle(.secondary)
+                Text("On").font(.rounded(12)).foregroundStyle(.secondary)
             } else {
                 Button("Open Settings", action: action)
+                    .buttonStyle(QuietButtonStyle())
             }
         }
         .padding(.vertical, 14)
@@ -516,13 +568,13 @@ struct SettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Settings")
-                .font(.system(size: 20, weight: .semibold))
+                .font(.rounded(20, .semibold))
                 .padding(.bottom, 18)
 
             Divider()
 
             Toggle("Ask AI when a button can't be found with confidence", isOn: $model.aiEnabled)
-                .font(.system(size: 13))
+                .font(.rounded(13))
                 .padding(.vertical, 14)
 
             Divider()
@@ -546,27 +598,29 @@ struct SettingsView: View {
 
             HStack {
                 Text("Esc stops a running task.")
-                    .font(.system(size: 12))
+                    .font(.rounded(12))
                     .foregroundStyle(.tertiary)
                 Spacer()
                 Button("Done") { dismiss() }
+                    .buttonStyle(PrimaryButtonStyle())
                     .keyboardShortcut(.defaultAction)
             }
             .padding(.top, 18)
         }
         .padding(28)
         .frame(width: 460)
+        .fontDesign(.rounded)
     }
 
     private func field<F: View>(_ title: String, note: String?, @ViewBuilder input: () -> F) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
+            Text(title).font(.rounded(12, .medium)).foregroundStyle(.secondary)
             input()
                 .textFieldStyle(.plain)
-                .font(.system(size: 13))
+                .font(.rounded(13))
             if let note {
                 Text(note)
-                    .font(.system(size: 11))
+                    .font(.rounded(11))
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
