@@ -21,7 +21,7 @@ final class RiskTests: XCTestCase {
         for label in ["Send", "Save changes", "Delete", "Pay now", "Submit", "Place order", "Reply all", "Export…"] {
             XCTAssertEqual(RiskGuesser.guess([click(label)], at: 0).risk, .risky, label)
         }
-        for label in ["Address", "Inbox", "Search", "Next", "Cancel", "Settings", "Kris", "Notebook"] {
+        for label in ["Address", "Inbox", "Search", "Next", "Cancel", "Settings", "Kris", "Notebook", "Add", "+", "Apply filter"] {
             XCTAssertEqual(RiskGuesser.guess([click(label)], at: 0).risk, .normal, label)
         }
     }

@@ -166,6 +166,17 @@ final class VisualMatcherTests: XCTestCase {
         assertConfident(r, near: CGPoint(x: 45, y: 140))
     }
 
+    func testLabelOCRMissedDoesNotSinkAPerfectPicture() {
+        // A one character label like "7" often isn't read back by OCR. The picture still decides.
+        var c = Canvas(width: 480, height: 320)
+        c.icon(seed: 61, at: 120, 120)
+        c.icon(seed: 62, at: 300, 200)
+        let target = VisualTarget.make(window: c.image, lines: [line("7", x: 110, y: 120, width: 20)],
+                                       click: CGPoint(x: 120, y: 120), windowSize: size)
+        let r = VisualMatcher().match(target, window: c.image, lines: [line("Clear", x: 300, y: 40)], windowSize: size)
+        assertConfident(r, near: CGPoint(x: 120, y: 120))
+    }
+
     func testTwoIdenticalLabelsAreNotGuessedBetween() {
         let flat = Canvas(width: 480, height: 320).image
         let target = VisualTarget.make(window: flat, lines: [line("Reply", x: 300, y: 100, width: 40)],

@@ -28,17 +28,19 @@ public struct RiskGuess: Equatable {
 /// a false "risky" only means Deja Do stops instead of retrying; a false
 /// "normal" could send something twice.
 public enum RiskGuesser {
+    // Words that commit something to someone else or can't be taken back.
+    // OpenAdapt's list also has add, insert, apply, update, create and accept;
+    // those are left out here because they name everyday, undoable buttons
+    // (Calculator's + is "Add") and a false "risky" stops runs for nothing.
     static let writeStems = [
-        "sav(?:e|es|ing)", "submit(?:s|ted|ting)?", "confirm(?:s|ed|ing)?", "creat(?:e|es|ing)",
-        "delet(?:e|es|ing)", "remov(?:e|es|ing)", "updat(?:e|es|ing)", "send(?:s|ing)?", "reply", "post",
-        "publish(?:es|ed|ing)?", "pay(?:s|ing|ment)?", "sign[\\s\\-_]?up", "signup",
-        "(?:co[\\-_]?|e[\\-_]?)?sign(?:s|ed|ing)?(?![\\s\\-_]*(?:in|on|out)\\b)",
-        "regist(?:er|ers|ering|ration)", "enroll(?:s|ed|ing|ment)?", "add(?:s|ed|ing)?", "insert(?:s|ed|ing)?",
-        "appl(?:y|ies|ied)", "approv(?:e|es|ed|ing)", "accept(?:s|ed|ing)?", "transfer(?:s|red|ring)?",
+        "sav(?:e|es|ing)", "submit(?:s|ted|ting)?", "confirm(?:s|ed|ing)?", "delet(?:e|es|ing)", "remov(?:e|es|ing)",
+        "send(?:s|ing)?", "reply", "reply all", "post", "publish(?:es|ed|ing)?", "pay(?:s|ing|ment)?",
+        "sign[\\s\\-_]?up", "signup", "(?:co[\\-_]?|e[\\-_]?)?sign(?:s|ed|ing)?(?![\\s\\-_]*(?:in|on|out)\\b)",
+        "regist(?:er|ers|ering|ration)", "enroll(?:s|ed|ing|ment)?", "approv(?:e|es|ed|ing)", "transfer(?:s|red|ring)?",
         "upload(?:s|ed|ing)?", "overwrit(?:e|es|ing)", "discard(?:s|ed|ing)?", "archiv(?:e|es|ing)",
         "finaliz(?:e|es|ing)", "finalise", "checkout", "check[\\s\\-_]?out", "purchas(?:e|es|ing)",
-        "place[\\s\\-_]order", "order", "book", "trash", "empty", "move to bin", "share", "invite",
-        "download(?:s|ed|ing)?", "export(?:s|ed|ing)?", "import(?:s|ed|ing)?", "print"
+        "place[\\s\\-_]order", "order now", "buy", "book now", "trash", "empty trash", "move to bin", "share", "invite",
+        "export(?:s|ed|ing)?", "unsubscribe", "cancel (?:order|subscription|booking|appointment)"
     ]
     static let writeRE = try! NSRegularExpression(
         pattern: "\\b(?:" + writeStems.joined(separator: "|") + ")\\b", options: [.caseInsensitive])

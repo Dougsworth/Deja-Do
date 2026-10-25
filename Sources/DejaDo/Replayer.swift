@@ -109,7 +109,7 @@ final class Replayer: @unchecked Sendable {
                 if expectation != nil, !Self.isCheckable(step) { expectation = nil }
                 var before: ScreenState?
                 if let e = expectation {
-                    before = await ScreenStateReader.read(pid: nil, ocr: settings.visionEnabled && e.usedOCR,
+                    before = await ScreenStateReader.read(pid: pid(for: step), ocr: settings.visionEnabled && e.usedOCR,
                                                           pixels: settings.visionEnabled)
                 }
 
@@ -213,6 +213,17 @@ final class Replayer: @unchecked Sendable {
 
     // MARK: Safety
 
+    /// The app a step acts on, so checks read its window and not whatever is in front.
+    private func pid(for step: Step) -> pid_t? {
+        let bundleID: String?
+        switch step.kind {
+        case .click(let t, _, _, _): bundleID = t.bundleID
+        case .activate: bundleID = nil
+        default: bundleID = expectedApp?.bundleID
+        }
+        return bundleID.flatMap { ElementFinder.runningApp($0)?.processIdentifier }
+    }
+
     /// Makes sure the app the step is for is still in front before sending it
     /// any input, so nothing lands in a notification, a chat or another window.
     /// Brings it back once if it slipped behind; stops if that doesn't work.
@@ -306,7 +317,8 @@ final class Replayer: @unchecked Sendable {
         let ocr = settings.visionEnabled && e.usedOCR
         while true {
             try checkCancelled()
-            let after = await ScreenStateReader.read(pid: nil, ocr: ocr, pixels: settings.visionEnabled)
+            // Read the step's own app, even if something else has jumped in front.
+            let after = await ScreenStateReader.read(pid: pid(for: step), ocr: ocr, pixels: settings.visionEnabled)
             let result = StepVerifier.check(e, before: before, after: after)
             switch loop.next(result) {
             case .proceed(let extra):

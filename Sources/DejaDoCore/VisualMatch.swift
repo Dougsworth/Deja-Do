@@ -205,10 +205,14 @@ public struct VisualMatcher {
         var scored: [VisualCandidate] = unique.map { point, source in
             var x: [VisualSignal: Double] = [:]
             if let clicked = t.clickedText {
-                x[.text] = lines
-                    .filter { $0.frame.insetBy(dx: -6, dy: -6).contains(point) }
-                    .compactMap { TextSimilarity.similarity(clicked.text, $0.text) }
-                    .max() ?? 0
+                // Text read at this spot that matches counts for it, different text counts
+                // against it, and no text read here at all (OCR often misses single
+                // characters and symbols) says nothing either way.
+                // But if the label was read somewhere else on screen, a spot without it is a wrong spot.
+                let here = lines.filter { $0.frame.insetBy(dx: -6, dy: -6).contains(point) }
+                if !here.isEmpty || strongLabelMatches > 0 {
+                    x[.text] = here.compactMap { TextSimilarity.similarity(clicked.text, $0.text) }.max() ?? 0
+                }
             }
             if !fits.isEmpty { x[.anchor] = Self.anchorSupport(point, fits) }
             if texture >= 6 {
