@@ -125,7 +125,7 @@ enum AppsSelfTest {
         let (error, notes) = await SelfTest.runTask(task, vision: vision)
         let once = occurrences(of: sentence) == 1
         log.check("Replay types the sentence exactly once and closes the sheet", error == nil && once && !sheetShowing(),
-                  (error ?? "finished") + " · document: “\(documentText().prefix(60))”")
+                  (error ?? "finished") + " · document: “\(documentText().prefix(60))” · \(sheetReason() ?? "no Save panel")")
         log.line("      notes: \(notes)")
         if sheetShowing() { key(53, command: false); try? await Task.sleep(nanoseconds: 800_000_000) }
 
@@ -143,7 +143,7 @@ enum AppsSelfTest {
         let (stopError, stopNotes) = await SelfTest.runTask(broken, vision: vision)
         log.check("A ⌘S whose result doesn't match stops the run without being repeated",
                   stopError?.contains("Sent to Ana") == true && !stopNotes.contains("trying once more") && occurrences(of: sentence) == 1,
-                  stopError ?? "the run finished, it should have stopped")
+                  (stopError ?? "the run finished, it should have stopped") + " · document: “\(documentText().prefix(60))”")
         log.check("…and the stop says it may already have saved", stopError?.contains("may already have") == true, stopError ?? "")
         log.line("      notes: \(stopNotes)")
         if sheetShowing() { key(53, command: false); try? await Task.sleep(nanoseconds: 800_000_000) }
@@ -173,7 +173,7 @@ enum AppsSelfTest {
     }
 
     static func textArea() -> AXUIElement? {
-        guard let w = window() else { return nil }
+        guard let w = mainWindow() else { return nil }
         return AX.collect(from: w, origin: nil, limit: 400) { $0 == "AXTextArea" }.first?.element
     }
 
@@ -186,16 +186,28 @@ enum AppsSelfTest {
         documentText().components(separatedBy: s).count - 1
     }
 
-    /// The Save panel: a sheet on the document, or on some Macs a separate dialog window.
-    static func sheetShowing() -> Bool {
-        guard let el = appElement() else { return false }
-        for w in AX.elements(AX.raw(el, kAXWindowsAttribute)) {
-            if AX.elements(AX.raw(w, kAXChildrenAttribute)).contains(where: { AX.role($0) == "AXSheet" }) { return true }
-            let texts = AX.collect(from: w, origin: nil, limit: 300) { $0 == "AXStaticText" || $0 == "AXButton" }
-            if texts.contains(where: { ($0.node.label ?? "").hasPrefix("Save As") }) { return true }
-        }
-        return false
+    /// The document window, even while a Save panel has focus.
+    static func mainWindow() -> AXUIElement? {
+        guard let el = appElement() else { return nil }
+        return AX.element(el, kAXMainWindowAttribute) ?? window()
     }
+
+    /// Why a Save panel looks to be showing, or nil when none is.
+    static func sheetReason() -> String? {
+        guard let el = appElement() else { return nil }
+        if let m = mainWindow(), AX.elements(AX.raw(m, kAXChildrenAttribute)).contains(where: { AX.role($0) == "AXSheet" }) {
+            return "sheet on \(AX.string(m, kAXTitleAttribute) ?? "the document")"
+        }
+        if let f = AX.element(el, kAXFocusedWindowAttribute), let m = mainWindow(), !CFEqual(f, m) {
+            let texts = AX.collect(from: f, origin: nil, limit: 300) { $0 == "AXStaticText" || $0 == "AXButton" }
+            if texts.contains(where: { ($0.node.label ?? "").hasPrefix("Save As") }) {
+                return "Save window “\(AX.string(f, kAXTitleAttribute) ?? "")” in front"
+            }
+        }
+        return nil
+    }
+
+    static func sheetShowing() -> Bool { sheetReason() != nil }
 
     static func openTextEdit() async -> Bool {
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: textEditID) else { return false }
