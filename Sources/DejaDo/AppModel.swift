@@ -79,6 +79,18 @@ final class AppModel: ObservableObject, @unchecked Sendable {
     @Published var askBeforeRisky: Bool { didSet { UserDefaults.standard.set(askBeforeRisky, forKey: "askBeforeRisky") } }
     /// Let other apps and agents run tasks through dejado:// links without asking each time.
     @Published var allowOtherApps: Bool { didSet { UserDefaults.standard.set(allowOtherApps, forKey: "allowOtherApps") } }
+    /// Let tools on this Mac (n8n, scripts, Shortcuts) start tasks over a local web address.
+    @Published var webhooksEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(webhooksEnabled, forKey: "webhooksEnabled")
+            updateWebhooks()
+        }
+    }
+    @Published var webhookToken: String = ""
+    @Published var webhookStatus: String = ""
+    let webhooks = WebhookServer()
+
+    var webhookURL: String { "http://127.0.0.1:\(webhooks.port == 0 ? WebhookServer.defaultPort : webhooks.port)" }
 
     /// A spreadsheet run that stopped part way, ready to carry on.
     struct Resume {
@@ -148,6 +160,7 @@ final class AppModel: ObservableObject, @unchecked Sendable {
         checkSteps = defaults.object(forKey: "checkSteps") as? Bool ?? true
         askBeforeRisky = defaults.object(forKey: "askBeforeRisky") as? Bool ?? false
         allowOtherApps = defaults.object(forKey: "allowOtherApps") as? Bool ?? false
+        webhooksEnabled = defaults.object(forKey: "webhooksEnabled") as? Bool ?? false
         let scan = persistence.scan()
         automations = scan.automations
         if !scan.problems.isEmpty { status = scan.problems.joined(separator: " ") }
@@ -162,6 +175,62 @@ final class AppModel: ObservableObject, @unchecked Sendable {
         permissionTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             self?.refreshPermissions()
         }
+        updateWebhooks()
+    }
+
+    // MARK: Webhooks
+
+    /// Starts or stops the local web address to match the setting.
+    func updateWebhooks() {
+        guard webhooksEnabled else {
+            webhooks.stop()
+            webhookStatus = ""
+            return
+        }
+        if webhookToken.isEmpty {
+            webhookToken = Keychain.get("webhookToken") ?? ""
+            if webhookToken.isEmpty {
+                webhookToken = WebhookAPI.newToken()
+                Keychain.set(webhookToken, for: "webhookToken")
+            }
+        }
+        let hooks = WebhookServer.Hooks(
+            tasks: { [weak self] in
+                (self?.automations ?? []).map { WebhookAPI.TaskInfo(id: $0.id, name: $0.name, variables: $0.variableNames) }
+            },
+            busy: { [weak self] in
+                guard let self else { return true }
+                return self.runningID != nil || self.isRecording || self.isChecking || self.isTeachingPopup
+            },
+            start: { [weak self] request, _, done in
+                guard let self, let a = self.automations.first(where: { $0.id == request.task.id }) else { return false }
+                self.status = "Another tool started “\(a.name)”."
+                return self.start(a, rows: [request.values], onFinish: done)
+            })
+        if webhooks.start(port: WebhookServer.defaultPort, token: webhookToken, hooks: hooks) {
+            webhookStatus = "Listening at \(webhookURL), on this Mac only."
+        } else {
+            webhookStatus = "Couldn't listen on port \(WebhookServer.defaultPort): \(webhooks.lastError ?? "it may be in use")."
+        }
+    }
+
+    /// A new token; tools using the old one stop working.
+    func newWebhookToken() {
+        webhookToken = WebhookAPI.newToken()
+        Keychain.set(webhookToken, for: "webhookToken")
+        updateWebhooks()
+    }
+
+    func copyWebhookDetails() {
+        let text = """
+        curl -X POST \(webhookURL)/run \\
+          -H "Authorization: Bearer \(webhookToken)" \\
+          -H "Content-Type: application/json" \\
+          -d '{"task": "TASK NAME", "values": {}, "wait": true}'
+        """
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        status = "Copied an example request with the token."
     }
 
     var permissionsReady: Bool { hasAccessibility && hasInputMonitoring }
@@ -300,13 +369,15 @@ final class AppModel: ObservableObject, @unchecked Sendable {
         start(automation, rows: rows)
     }
 
-    private func start(_ automation: Automation, rows: [[String: String]], from startRow: Int = 0) {
-        guard runningID == nil, !isRecording else { return }
+    @discardableResult
+    private func start(_ automation: Automation, rows: [[String: String]], from startRow: Int = 0,
+                       onFinish: ((RunRecord, RunOutcome) -> Void)? = nil) -> Bool {
+        guard runningID == nil, !isRecording else { return false }
         refreshPermissions()
         guard hasAccessibility else {
             Permissions.requestAccessibility()
             status = "Allow Accessibility for Deja Do, then run it again."
-            return
+            return false
         }
         runningRow = 0
         rowCount = max(1, rows.count)
@@ -361,6 +432,8 @@ final class AppModel: ObservableObject, @unchecked Sendable {
         let firstRow = startRow
         Task.detached {
             var failure: String?
+            var lastRecord: RunRecord?
+            var lastOutcome: RunOutcome = .finished
             for r in firstRow..<rows.count {
                 let values = rows[r]
                 DispatchQueue.main.async { [weak self] in
@@ -388,6 +461,8 @@ final class AppModel: ObservableObject, @unchecked Sendable {
                                           ran: stop.map { i <= $0.step } ?? true)
                     })
                 history.add(record, to: id)
+                lastRecord = record
+                lastOutcome = stop?.outcome ?? .finished
 
                 if let stop {
                     let where_ = total > 1 ? "Stopped at row \(r + 1) of \(total): " : ""
@@ -407,10 +482,14 @@ final class AppModel: ObservableObject, @unchecked Sendable {
                 }
             }
             let done = failure
+            let finalRecord = lastRecord
+            let finalOutcome = lastOutcome
             DispatchQueue.main.async { [weak self] in
                 self?.finishRun(id: id, failure: done, rows: total)
+                if let onFinish, let finalRecord { onFinish(finalRecord, finalOutcome) }
             }
         }
+        return true
     }
 
     /// Carries on a spreadsheet run that stopped.

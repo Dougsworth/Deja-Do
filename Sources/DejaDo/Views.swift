@@ -1075,6 +1075,28 @@ struct SettingsView: View {
 
             Divider()
 
+            toggle("Let tools on this Mac start tasks", isOn: $model.webhooksEnabled,
+                   note: "For n8n, Node-RED, scripts and Shortcuts running on this Mac. They send a request with a token to a local address, and can get the result back. Nothing on the network can reach it.")
+            if model.webhooksEnabled {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(model.webhookStatus)
+                        .font(.rounded(11))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                    HStack(spacing: 10) {
+                        Button("Copy example request") { model.copyWebhookDetails() }
+                            .buttonStyle(QuietButtonStyle(compact: true))
+                        Button("New token") { model.newWebhookToken() }
+                            .buttonStyle(QuietButtonStyle(compact: true))
+                            .help("Tools using the old token stop working")
+                        Spacer()
+                    }
+                }
+                .padding(.bottom, 14)
+            }
+
+            Divider()
+
             toggle("Use the screen when an app doesn't describe its buttons", isOn: $model.useVision,
                    note: "For canvas apps, games and virtual machines. Keeps a small picture and the text around each click, read on your Mac and never sent anywhere.")
             if model.useVision && !model.hasScreenRecording {

@@ -236,7 +236,82 @@ enum SelfTest {
             await setMode(basic: true)
         }
 
+        await webhook(task, vision: vision, log: log)
         return log.failures == 0
+    }
+
+    /// Starts the task the way n8n or a script would: an HTTP request to the local address.
+    static func webhook(_ task: Automation, vision: Bool, log: Log) async {
+        let server = WebhookServer()
+        let token = WebhookAPI.newToken()
+        let busy = Flag()
+        let hooks = WebhookServer.Hooks(
+            tasks: { [WebhookAPI.TaskInfo(id: task.id, name: task.name, variables: task.variableNames)] },
+            busy: { busy.value },
+            start: { _, _, done in
+                busy.value = true
+                Task.detached {
+                    let started = Date()
+                    let (error, _) = await runTask(task, vision: vision)
+                    let record = RunRecord(started: started, duration: Date().timeIntervalSince(started),
+                                           outcome: error ?? "Done.", succeeded: error == nil,
+                                           steps: task.steps.enumerated().map { .init(index: $0.offset, summary: $0.element.safeSummary, note: nil, ran: true) })
+                    let outcome: RunOutcome = error == nil ? .finished : .stoppedBeforeChanges(atStep: 0)
+                    DispatchQueue.main.async { busy.value = false; done(record, outcome) }
+                }
+                return true
+            })
+        // A spare port, so a copy of Deja Do already listening on the usual one doesn't matter.
+        guard server.start(port: 0, token: token, hooks: hooks) else {
+            log.check("Local web address starts", false, server.lastError ?? "")
+            return
+        }
+        defer { server.stop() }
+        log.check("Local web address starts", true, "port \(server.port)")
+        let base = "http://127.0.0.1:\(server.port)"
+
+        let (noToken, _) = await http("POST", base + "/run", token: nil, body: ["task": task.name])
+        log.check("A request without the token is refused", noToken == 401, "status \(noToken)")
+
+        await press(["all clear", "clear", "ac", "c"])
+        // Ask for a second run while the first is going: it must be told Deja Do is busy.
+        let second = Task.detached { () -> Int in
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            return await http("POST", base + "/run", token: token, body: ["task": task.name]).status
+        }
+        let (code, reply) = await http("POST", base + "/run", token: token, body: ["task": task.name, "wait": true])
+        let status = reply["status"] as? String
+        log.check("A request with the token runs the task and waits for the result", code == 200 && status == "succeeded" && displayShows("15"),
+                  "status \(code), run \(status ?? "none"), display \(displayText())")
+        let busyCode = await second.value
+        log.check("A second request while it runs is told Deja Do is busy", busyCode == 409, "status \(busyCode)")
+        if let id = reply["runId"] as? String {
+            let (lookup, again) = await http("GET", base + "/runs/" + id, token: token, body: nil)
+            log.check("The run can be looked up afterwards", lookup == 200 && again["status"] as? String == "succeeded", "status \(lookup)")
+        }
+    }
+
+    final class Flag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _value = false
+        var value: Bool {
+            get { lock.lock(); defer { lock.unlock() }; return _value }
+            set { lock.lock(); _value = newValue; lock.unlock() }
+        }
+    }
+
+    static func http(_ method: String, _ url: String, token: String?, body: [String: Any]?) async -> (status: Int, json: [String: Any]) {
+        guard let u = URL(string: url) else { return (0, [:]) }
+        var req = URLRequest(url: u, timeoutInterval: 120)
+        req.httpMethod = method
+        if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        if let body {
+            req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        guard let (data, response) = try? await URLSession.shared.data(for: req) else { return (0, [:]) }
+        let json = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        return ((response as? HTTPURLResponse)?.statusCode ?? 0, json)
     }
 
     static func replay(_ a: Automation, name: String, expect: String, vision: Bool, log: Log,
