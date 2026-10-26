@@ -155,13 +155,18 @@ final class Recorder: @unchecked Sendable {
         case .leftMouseDown, .rightMouseDown, .keyDown:
             guard let copy = event.copy() else { return }
             let at = Date()
+            // What's under the pointer has to be read now: a menu closes, or a
+            // Submit button is replaced, the moment the click lands. One quick
+            // question with a short limit; if the app is too slow to answer,
+            // it's asked again in a moment instead.
+            let hit = type == .keyDown ? nil : AX.element(at: event.location, timeout: 0.25)
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.isRecording else { return }
                 self.eventTime = at
                 defer { self.eventTime = nil }
                 switch type {
-                case .leftMouseDown: self.handleClick(copy, button: .left)
-                case .rightMouseDown: self.handleClick(copy, button: .right)
+                case .leftMouseDown: self.handleClick(copy, button: .left, hit: hit)
+                case .rightMouseDown: self.handleClick(copy, button: .right, hit: hit)
                 default: self.handleKey(copy)
                 }
             }
@@ -173,10 +178,11 @@ final class Recorder: @unchecked Sendable {
     /// When the event being handled actually happened, which may be a moment before it's handled.
     private var eventTime: Date?
 
-    private func handleClick(_ event: CGEvent, button: MouseButtonKind) {
+    private func handleClick(_ event: CGEvent, button: MouseButtonKind, hit: AXUIElement? = nil) {
         let point = event.location
         let clickState = Int(event.getIntegerValueField(.mouseEventClickState))
-        if AX.isOwn(at: point) { return }
+        if let hit, AX.pid(hit) == ownPID { return }
+        if hit == nil, AX.isOwn(at: point) { return }
         // The newest read since the last action shows the screen just before this click.
         // The second half of a double click is part of the same step, so it isn't a boundary.
         let shot = clickState >= 2 ? nil : snapshot()
@@ -188,7 +194,7 @@ final class Recorder: @unchecked Sendable {
         if visionEnabled, clickState < 2, picture == nil { recordVisual(stepID: stepID, at: point) }
         // If the app won't describe what was clicked, keep the click anyway as a
         // position inside its window rather than silently losing a step.
-        guard let capture = AX.capture(at: point) ?? AX.positionCapture(at: point) else { return }
+        guard let capture = AX.capture(at: point, hit: hit) ?? AX.positionCapture(at: point) else { return }
         let target = capture.locator
         flushText()
         inSecureField = capture.isSecureField

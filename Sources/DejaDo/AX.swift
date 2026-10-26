@@ -112,9 +112,9 @@ enum AX {
         AXUIElementPerformAction(el, action as CFString) == .success
     }
 
-    static func element(at point: CGPoint) -> AXUIElement? {
+    static func element(at point: CGPoint, timeout: Float = 1.0) -> AXUIElement? {
         let system = AXUIElementCreateSystemWide()
-        AXUIElementSetMessagingTimeout(system, 1.0)
+        AXUIElementSetMessagingTimeout(system, timeout)
         var el: AXUIElement?
         guard AXUIElementCopyElementAtPosition(system, Float(point.x), Float(point.y), &el) == .success else { return nil }
         return el
@@ -486,8 +486,10 @@ enum AX {
 
     /// Looks at what is under the mouse right now and describes it.
     /// Returns nil for our own windows, so we never record ourselves.
-    static func capture(at point: CGPoint) -> Capture? {
-        guard let hit = element(at: point) else { return nil }
+    /// - Parameter hit: what was under the point at the moment of the click, when
+    ///   already known. A menu item or a Submit button may be gone a moment later.
+    static func capture(at point: CGPoint, hit known: AXUIElement? = nil) -> Capture? {
+        guard let hit = known ?? element(at: point) else { return nil }
         let ownerPID = Self.pid(hit)
         if ownerPID == ProcessInfo.processInfo.processIdentifier { return nil }
 
@@ -542,8 +544,12 @@ enum AX {
             anchors: inMenu ? nil : Self.anchors(around: el, frame: n.frame, label: n.label, root: root),
             context: Self.context(of: el, stopAt: root),
             windowSize: windowFrame?.size,
-            web: Self.webIdentity(of: el)
+            web: Self.webIdentity(of: el) ?? (Self.isBrowser(bundleID) ? window.flatMap { Self.webIdentity(inWindow: $0) } : nil)
         )
+    }
+
+    static func isBrowser(_ bundleID: String) -> Bool {
+        chromiumBrowsers.contains(bundleID) || bundleID.hasPrefix("com.apple.Safari") || bundleID == "org.mozilla.firefox"
     }
 
     // MARK: Web pages

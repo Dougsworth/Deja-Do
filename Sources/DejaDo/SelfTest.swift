@@ -240,6 +240,7 @@ enum SelfTest {
         }
 
         await webhook(task, vision: vision, log: log)
+        await menuChoice(vision: vision, log: log)
         await calculatorInSpanish(log, vision: vision)
         return log.failures == 0
     }
@@ -285,6 +286,66 @@ enum SelfTest {
         await setMode(basic: true)
         // Leave it closed rather than in Spanish.
         NSRunningApplication.runningApplications(withBundleIdentifier: calculatorID).first?.terminate()
+    }
+
+    /// Choosing View › Scientific from the menu bar. A menu closes the moment
+    /// an item is clicked, so what was clicked has to be read at that instant.
+    static func menuChoice(vision: Bool, log: Log) async {
+        await setMode(basic: true)
+        let basicCount = buttonNames().count
+        let recorder = await MainActor.run { () -> Recorder in
+            let r = Recorder()
+            r.visionEnabled = vision
+            r.checkSteps = true
+            _ = r.start()
+            return r
+        }
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        let opened = await clickMenuBar("View")
+        let chose = opened ? await clickMenuItem("Scientific") : false
+        try? await Task.sleep(nanoseconds: 1_200_000_000)
+        let steps: [Step] = await withCheckedContinuation { cont in
+            DispatchQueue.main.async { recorder.finish { cont.resume(returning: $0) } }
+        }
+        let sciCount = buttonNames().count
+        let items = steps.compactMap { step -> ElementLocator? in
+            if case .click(let t, _, _, _) = step.kind { return t }
+            return nil
+        }
+        log.check("Recorded View › Scientific from the menu bar", opened && chose && sciCount > basicCount
+                    && items.last?.label == "Scientific" && items.last?.inMenu == true,
+                  steps.map(\.summary).joined(separator: " | "))
+        guard items.last?.label == "Scientific" else { await setMode(basic: true); return }
+        await setMode(basic: true)
+        let (error, notes) = await runTask(Automation(name: "Self test menu", steps: steps), vision: vision)
+        log.check("Replaying the menu choice switches to Scientific", error == nil && buttonNames().count > basicCount,
+                  (error ?? "finished") + " · \(buttonNames().count) buttons, Basic has \(basicCount)")
+        log.line("      notes: \(notes)")
+        await setMode(basic: true)
+    }
+
+    static func menuBar() -> AXUIElement? {
+        guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: calculatorID).first else { return nil }
+        app.activate(options: [.activateIgnoringOtherApps])
+        return AX.element(AXUIElementCreateApplication(app.processIdentifier), kAXMenuBarAttribute)
+    }
+
+    static func clickMenuBar(_ title: String) async -> Bool {
+        guard let bar = menuBar(),
+              let item = AX.children(bar).first(where: { AX.string($0, kAXTitleAttribute) == title }),
+              let f = AX.frame(item) else { return false }
+        Input.click(at: CGPoint(x: f.midX, y: f.midY), button: .left, count: 1, modifiers: 0)
+        try? await Task.sleep(nanoseconds: 900_000_000)
+        return true
+    }
+
+    static func clickMenuItem(_ title: String) async -> Bool {
+        guard let bar = menuBar() else { return false }
+        let items = AX.collect(from: bar, origin: nil, limit: 800) { $0 == "AXMenuItem" }
+        guard let item = items.first(where: { $0.node.title == title }), let f = item.node.frame, f.width > 0 else { return false }
+        Input.click(at: CGPoint(x: f.midX, y: f.midY), button: .left, count: 1, modifiers: 0)
+        try? await Task.sleep(nanoseconds: 900_000_000)
+        return true
     }
 
     // Button names in English and Spanish.
