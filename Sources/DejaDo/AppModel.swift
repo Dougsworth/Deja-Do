@@ -781,7 +781,7 @@ final class AppModel: ObservableObject, @unchecked Sendable {
             try? await Task.sleep(nanoseconds: 700_000_000)
             let now = await ScreenStateReader.read(pid: pid, ocr: ocr, pixels: false)
             let signature = PopupRule.signature(now: now, normal: normal)
-            await MainActor.run {
+            await MainActor.run { [weak self] in
                 guard let self else { return }
                 guard !signature.isEmpty else {
                     self.isTeachingPopup = false
