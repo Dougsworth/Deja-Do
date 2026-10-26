@@ -401,6 +401,8 @@ enum SelfTest {
         }
         let (code, reply) = await http("POST", base + "/run", token: token, body: ["task": task.name, "wait": true])
         let status = reply["status"] as? String
+        // Give Calculator a moment to answer before reading its display.
+        for _ in 0..<10 where !displayShows("15") { try? await Task.sleep(nanoseconds: 200_000_000) }
         log.check("A request with the token runs the task and waits for the result", code == 200 && status == "succeeded" && displayShows("15"),
                   "status \(code), run \(status ?? "none"), display \(displayText())")
         let busyCode = await second.value
