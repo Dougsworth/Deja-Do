@@ -562,75 +562,53 @@ struct AutomationView: View {
             .padding(.vertical, 9)
             Divider()
 
-            List {
-                ForEach(variableSuggestions) { s in
-                    SuggestionLine(text: "Fill in “\(s.text.prefix(40))” each run as {{\(s.name)}}?",
-                                   accept: "Make it a variable") {
-                        model.applyVariable(s, in: automation.id)
-                    } dismiss: {
-                        model.dismissSuggestion(s.stepID)
-                    }
-                    .listRowSeparator(.visible)
-                    .listRowInsets(EdgeInsets(top: 0, leading: Metrics.gutter, bottom: 0, trailing: Metrics.gutter - 8))
-                }
-                ForEach($automation.steps) { $step in
-                    let n = number(of: step)
-                    StepRow(step: $step, number: n, state: state(for: n - 1), note: model.runNotes[step.id],
-                            expanded: expanded == step.id, risk: automation.risk(at: n - 1),
-                            trimReason: trimReasons[step.id], onRemove: { remove(step) },
-                            onKeep: { model.dismissSuggestion(step.id) },
-                            onEdited: { old, new in edited(step.id, old, new) }) {
-                        withAnimation(.easeOut(duration: 0.15)) { expanded = expanded == step.id ? nil : step.id }
-                    }
-                        .listRowSeparator(.visible)
-                        .listRowInsets(EdgeInsets(top: 0, leading: Metrics.gutter - 8, bottom: 0, trailing: Metrics.gutter - 8))
-                        .contextMenu {
-                            Button(step.isEnabled ? "Skip this step" : "Don't skip this step") {
-                                setStep(step.id) { $0.disabled = $0.isEnabled ? true : nil }
-                                edited(step.id, nil, nil)
-                            }
-                            if Self.canBeRisky(step) {
-                                let risky = automation.risk(at: n - 1).risk == .risky
-                                Button(risky ? "This doesn't send, save or delete" : "This sends, saves or deletes") {
-                                    setStep(step.id) { $0.risk = risky ? .normal : .risky }
-                                }
-                            }
-                            if model.beforeRepair[step.id] != nil {
-                                Button("Undo the AI fix") { model.undoRepair(automation: automation.id, step: step.id) }
-                            }
-                            Button("Add text to type after") { insertText(after: step) }
-                            Button("Add a 2 second wait after") { insertWait(after: step) }
-                            Divider()
-                            Button("Delete step", role: .destructive) { remove(step) }
+            // A plain stack rather than a List: the Mac's list takes the clicks
+            // meant for text fields inside its rows, so a step's name or text
+            // couldn't be clicked into and changed.
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(variableSuggestions) { s in
+                        SuggestionLine(text: "Fill in “\(s.text.prefix(40))” each run as {{\(s.name)}}?",
+                                       accept: "Make it a variable") {
+                            model.applyVariable(s, in: automation.id)
+                        } dismiss: {
+                            model.dismissSuggestion(s.stepID)
                         }
-                }
-                .onMove { from, to in
-                    automation.steps.move(fromOffsets: from, toOffset: to)
-                    automation.noteEdit(at: min(from.min() ?? to, to))
-                }
-                .onDelete { offsets in
-                    automation.steps.remove(atOffsets: offsets)
-                    automation.noteEdit(at: offsets.min() ?? 0)
-                }
-                if !automation.steps.isEmpty && model.runningID == nil {
-                    Text("Click a step to change it. Drag to reorder, or right click to skip, delete or add a step.")
-                        .font(.ui(11))
-                        .foregroundStyle(.tertiary)
-                        .padding(.vertical, 12)
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: 0, leading: Metrics.gutter + 26, bottom: 0, trailing: Metrics.gutter))
-                }
-                ForEach(automation.popups ?? []) { rule in
-                    SuggestionLine(text: "When “\(rule.name)” shows up, \(rule.dismiss.summary) and carry on.",
-                                   accept: nil, accepted: {}) {
-                        model.removePopup(rule, from: automation.id)
+                        .padding(.horizontal, Metrics.gutter)
+                        Divider().padding(.leading, Metrics.gutter)
                     }
-                    .listRowSeparator(.visible)
-                    .listRowInsets(EdgeInsets(top: 0, leading: Metrics.gutter, bottom: 0, trailing: Metrics.gutter - 8))
+                    ForEach($automation.steps) { $step in
+                        let n = number(of: step)
+                        StepRow(step: $step, number: n, state: state(for: n - 1), note: model.runNotes[step.id],
+                                expanded: expanded == step.id, risk: automation.risk(at: n - 1),
+                                trimReason: trimReasons[step.id], onRemove: { remove(step) },
+                                onKeep: { model.dismissSuggestion(step.id) },
+                                onEdited: { old, new in edited(step.id, old, new) }) {
+                            withAnimation(.easeOut(duration: 0.15)) { expanded = expanded == step.id ? nil : step.id }
+                        }
+                        .padding(.horizontal, Metrics.gutter - 8)
+                        .contentShape(Rectangle())
+                        .contextMenu { stepMenu(step, number: n) }
+                        Divider().padding(.leading, Metrics.gutter - 8)
+                    }
+                    if !automation.steps.isEmpty && model.runningID == nil {
+                        Text("Click a step to change it. Right click to move, skip, delete or add a step.")
+                            .font(.ui(11))
+                            .foregroundStyle(.tertiary)
+                            .padding(.vertical, 12)
+                            .padding(.leading, Metrics.gutter + 26)
+                    }
+                    ForEach(automation.popups ?? []) { rule in
+                        SuggestionLine(text: "When “\(rule.name)” shows up, \(rule.dismiss.summary) and carry on.",
+                                       accept: nil, accepted: {}) {
+                            model.removePopup(rule, from: automation.id)
+                        }
+                        .padding(.horizontal, Metrics.gutter)
+                        Divider().padding(.leading, Metrics.gutter)
+                    }
                 }
+                .padding(.bottom, 24)
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
         }
     }
 
@@ -703,6 +681,40 @@ struct AutomationView: View {
     private func setStep(_ id: UUID, _ change: (inout Step) -> Void) {
         guard let i = automation.steps.firstIndex(where: { $0.id == id }) else { return }
         change(&automation.steps[i])
+    }
+
+    @ViewBuilder private func stepMenu(_ step: Step, number n: Int) -> some View {
+        Button(step.isEnabled ? "Skip this step" : "Don't skip this step") {
+            setStep(step.id) { $0.disabled = $0.isEnabled ? true : nil }
+            edited(step.id, nil, nil)
+        }
+        if Self.canBeRisky(step) {
+            let risky = automation.risk(at: n - 1).risk == .risky
+            Button(risky ? "This doesn't send, save or delete" : "This sends, saves or deletes") {
+                setStep(step.id) { $0.risk = risky ? .normal : .risky }
+            }
+        }
+        if model.beforeRepair[step.id] != nil {
+            Button("Undo the AI fix") { model.undoRepair(automation: automation.id, step: step.id) }
+        }
+        Divider()
+        Button("Move up") { move(step, by: -1) }
+            .disabled(automation.steps.first?.id == step.id)
+        Button("Move down") { move(step, by: 1) }
+            .disabled(automation.steps.last?.id == step.id)
+        Divider()
+        Button("Add text to type after") { insertText(after: step) }
+        Button("Add a 2 second wait after") { insertWait(after: step) }
+        Divider()
+        Button("Delete step", role: .destructive) { remove(step) }
+    }
+
+    private func move(_ step: Step, by offset: Int) {
+        guard let i = automation.steps.firstIndex(where: { $0.id == step.id }) else { return }
+        let j = i + offset
+        guard automation.steps.indices.contains(j) else { return }
+        automation.steps.swapAt(i, j)
+        automation.noteEdit(at: min(i, j))
     }
 
     private func remove(_ step: Step) {
