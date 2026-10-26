@@ -336,6 +336,14 @@ enum AppsSelfTest {
             AXUIElementSetAttributeValue(w, kAXMainAttribute as CFString, kCFBooleanTrue)
             app()?.activate(options: [.activateIgnoringOtherApps])
             try? await Task.sleep(nanoseconds: 300_000_000)
+            // A Save panel still open on the document blocks closing it: cancel it first.
+            for sheet in AX.elements(AX.raw(w, kAXChildrenAttribute)) where AX.role(sheet) == "AXSheet" {
+                let buttons = AX.collect(from: sheet, origin: nil, limit: 200) { $0 == "AXButton" }
+                if let cancel = buttons.first(where: { ["cancel", "cancelar"].contains(($0.node.label ?? "").lowercased()) }) {
+                    AX.perform(cancel.element, kAXPressAction)
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                }
+            }
             if let close = AX.element(w, kAXCloseButtonAttribute) { AX.perform(close, kAXPressAction) } else { continue }
             for _ in 0..<12 {
                 try? await Task.sleep(nanoseconds: 250_000_000)
