@@ -80,7 +80,7 @@ enum SelfTest {
 
         var passed = true
         if suites.contains("calculator") { passed = await calculator(log, vision: vision) && passed }
-        if suites.contains("web") { passed = await WebSelfTest.run(log, vision: vision) && passed }
+        if suites.contains("web") || suites.contains("chrome") { passed = await WebSelfTest.run(log, vision: vision) && passed }
         if suites.contains("apps") { passed = await AppsSelfTest.run(log, vision: vision) && passed }
         return passed && log.failures == 0
     }

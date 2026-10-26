@@ -73,7 +73,8 @@ enum WebSelfTest {
         log.check("Test page server starts", true, "port \(server.port)")
         defer { server.stop() }
 
-        for id in [safariID, chromeID] {
+        let only = SelfTest.suites.contains("chrome") ? [chromeID] : [safariID, chromeID]
+        for id in only {
             guard NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) != nil else {
                 log.check("Web form in \(id == chromeID ? "Chrome" : "Safari")", true, "not installed, skipped", counted: false)
                 continue
@@ -83,7 +84,7 @@ enum WebSelfTest {
             let opened = Counter()
             server.reset()
             guard await open(server.url(breaks: []), waitForButton: true) else {
-                log.check("\(browserName) shows the test page", false, "front app \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "none")")
+                log.check("\(browserName) shows the test page", false, diagnose())
                 continue
             }
             opened.add()
@@ -266,6 +267,21 @@ enum WebSelfTest {
             }
         }
         return false
+    }
+
+    /// What the browser looks like to Accessibility, for when the page can't be found.
+    static func diagnose() -> String {
+        guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: browserID).first else { return "\(browserName) isn't running" }
+        let el = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(el, 1.0)
+        let ws = AX.elements(AX.raw(el, kAXWindowsAttribute))
+        let titles = ws.map { "“\(AX.string($0, kAXTitleAttribute) ?? "")”" }.joined(separator: ", ")
+        let w = window()
+        let areas = w.map { AX.collect(from: $0, origin: nil, limit: 3000) { $0 == "AXWebArea" } } ?? []
+        let buttons = w.map { AX.collect(from: $0, origin: nil, limit: 3000) { $0 == "AXButton" } } ?? []
+        let named = buttons.compactMap(\.node.label).prefix(8).joined(separator: ", ")
+        let url = areas.compactMap { AX.url(of: $0.element)?.absoluteString }.joined(separator: " ")
+        return "front \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "none"); windows \(titles); web areas \(areas.count) \(url); buttons \(buttons.count): \(named)"
     }
 
     static func window() -> AXUIElement? {
