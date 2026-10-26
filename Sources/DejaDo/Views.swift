@@ -565,6 +565,8 @@ struct AutomationView: View {
             // A plain stack rather than a List: the Mac's list takes the clicks
             // meant for text fields inside its rows, so a step's name or text
             // couldn't be clicked into and changed.
+            // Worked out once per update, not once per step.
+            let trims = trimReasons
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(variableSuggestions) { s in
@@ -581,7 +583,7 @@ struct AutomationView: View {
                         let n = number(of: step)
                         StepRow(step: $step, number: n, state: state(for: n - 1), note: model.runNotes[step.id],
                                 expanded: expanded == step.id, risk: automation.risk(at: n - 1),
-                                trimReason: trimReasons[step.id], onRemove: { remove(step) },
+                                trimReason: trims[step.id], onRemove: { remove(step) },
                                 onKeep: { model.dismissSuggestion(step.id) },
                                 onEdited: { old, new in edited(step.id, old, new) }) {
                             withAnimation(.easeOut(duration: 0.15)) { expanded = expanded == step.id ? nil : step.id }
@@ -835,15 +837,22 @@ struct DraftField: View {
     let placeholder: String
     @Binding var text: String
     var font: Font = .ui(12)
-    @State private var draft = ""
+    @State private var draft: String
     @FocusState private var focused: Bool
+
+    init(placeholder: String, text: Binding<String>, font: Font = .ui(12)) {
+        self.placeholder = placeholder
+        self._text = text
+        self.font = font
+        // Filled in from the start, so the field never shows empty while it loads.
+        self._draft = State(initialValue: text.wrappedValue)
+    }
 
     var body: some View {
         TextField(placeholder, text: $draft)
             .textFieldStyle(.plain)
             .font(font)
             .focused($focused)
-            .onAppear { draft = text }
             .onChange(of: text) { new in if !focused { draft = new } }
             .onChange(of: focused) { now in if !now { commit() } }
             .onSubmit { commit() }
@@ -1045,8 +1054,6 @@ struct StepRow: View {
             }
             .frame(maxWidth: 200, alignment: .leading)
             .padding(.top, 2)
-        default:
-            EmptyView()
         }
     }
 
