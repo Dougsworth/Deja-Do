@@ -94,7 +94,7 @@ enum SelfTest {
         await setMode(basic: true)
 
         // 1. Record 7 + 8 = by really clicking.
-        await press(["all clear", "clear", "ac", "c"])
+        await press(clearNames)
         let recorder = await MainActor.run { () -> Recorder in
             let r = Recorder()
             r.visionEnabled = vision
@@ -144,7 +144,7 @@ enum SelfTest {
             broken.steps[i].expect = e
             broken.steps[i].onMismatch = .retryThenStop
         }
-        await press(["all clear", "clear", "ac", "c"])
+        await press(clearNames)
         let (error, notes) = await runTask(broken, vision: vision)
         log.check("Step check stops a run whose screen doesn't match",
                   error?.contains("Sent to Ana") == true, error ?? "the run finished, it should have stopped")
@@ -156,7 +156,7 @@ enum SelfTest {
         if let i = riskyBroken.steps.lastIndex(where: { if case .click = $0.kind { return true }; return false }) {
             riskyBroken.steps[i].risk = .risky
         }
-        await press(["all clear", "clear", "ac", "c"])
+        await press(clearNames)
         let (riskyError, riskyNotes) = await runTask(riskyBroken, vision: vision)
         log.check("A risky step stops without being repeated",
                   riskyError != nil && !riskyNotes.contains("trying once more"), riskyError ?? "it finished")
@@ -164,7 +164,7 @@ enum SelfTest {
                   riskyError ?? "")
 
         // 6. Check finds every button without clicking anything.
-        await press(["all clear", "clear", "ac", "c"])
+        await press(clearNames)
         let shown = displayText()
         var found = 0, clicksToCheck = 0
         for step in task.steps {
@@ -180,7 +180,7 @@ enum SelfTest {
         if let i = slow.steps.firstIndex(where: { if case .click = $0.kind { return true }; return false }) {
             slow.steps.insert(Step(kind: .wait(seconds: 2)), at: i + 1)
         }
-        await press(["all clear", "clear", "ac", "c"])
+        await press(clearNames)
         let finder = URL(fileURLWithPath: "/System/Library/CoreServices/Finder.app")
         Task.detached {
             try? await Task.sleep(nanoseconds: 1_800_000_000)
@@ -226,7 +226,7 @@ enum SelfTest {
             // Every button changes size and place here. Getting 15 is great; stopping
             // safely is fine; clicking the wrong button and carrying on is the failure.
             await setMode(basic: false)
-            await press(["all clear", "clear", "ac", "c"])
+            await press(clearNames)
             let (sciError, sciNotes) = await runTask(screenOnly, vision: true)
             let right = sciError == nil && displayShows("15")
             let safeStop = sciError != nil
@@ -240,7 +240,63 @@ enum SelfTest {
         }
 
         await webhook(task, vision: vision, log: log)
+        await calculatorInSpanish(log, vision: vision)
         return log.failures == 0
+    }
+
+    /// Calculator reopened in Spanish: recorded and replayed with Spanish
+    /// labels. Calculator holds nothing of the person's, so it's safe to quit.
+    static func calculatorInSpanish(_ log: Log, vision: Bool) async {
+        log.line("Calculator in Spanish")
+        if let app = NSRunningApplication.runningApplications(withBundleIdentifier: calculatorID).first {
+            app.terminate()
+            for _ in 0..<20 where NSRunningApplication.runningApplications(withBundleIdentifier: calculatorID).first != nil {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+        }
+        guard await openCalculator(arguments: ["-AppleLanguages", "(es)"]) else {
+            log.check("Spanish: Calculator opens", false)
+            return
+        }
+        await setMode(basic: true)
+        let names = buttonNames()
+        log.check("Spanish: Calculator opens", true, "buttons: " + names.prefix(8).joined(separator: ", "))
+        await press(clearNames)
+        let recorder = await MainActor.run { () -> Recorder in
+            let r = Recorder()
+            r.visionEnabled = vision
+            r.checkSteps = true
+            _ = r.start()
+            return r
+        }
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        var pressedAll = true
+        for keys in [sevenNames, plusNames, eightNames, equalsNames] { pressedAll = await press(keys) && pressedAll }
+        try? await Task.sleep(nanoseconds: 800_000_000)
+        let steps: [Step] = await withCheckedContinuation { cont in
+            DispatchQueue.main.async { recorder.finish { cont.resume(returning: $0) } }
+        }
+        log.check("Spanish: recorded 7 + 8 =", pressedAll && displayShows("15"), steps.map(\.summary).joined(separator: " | "))
+        let task = Automation(name: "Self test Calculator in Spanish", steps: steps)
+        log.check("Spanish: no step mistaken for a risky one", task.steps.indices.allSatisfy { task.risk(at: $0).risk == .normal })
+        await replay(task, name: "Spanish: replay", expect: "15", vision: vision, log: log)
+        await setMode(basic: false)
+        await replay(task, name: "Spanish: replay in the Scientific layout", expect: "15", vision: vision, log: log)
+        await setMode(basic: true)
+        // Leave it closed rather than in Spanish.
+        NSRunningApplication.runningApplications(withBundleIdentifier: calculatorID).first?.terminate()
+    }
+
+    // Button names in English and Spanish.
+    static let clearNames = ["all clear", "clear", "ac", "c", "borrar todo", "borrar"]
+    static let sevenNames = ["7", "seven", "siete"]
+    static let eightNames = ["8", "eight", "ocho"]
+    static let plusNames = ["+", "add", "plus", "sumar", "más", "mas"]
+    static let equalsNames = ["=", "equals", "equal", "igual", "es igual a"]
+
+    static func buttonNames() -> [String] {
+        guard let w = window() else { return [] }
+        return AX.collect(from: w, origin: nil, limit: 800) { $0 == "AXButton" }.compactMap { $0.node.label ?? $0.node.desc }
     }
 
     /// Starts the task the way n8n or a script would: an HTTP request to the local address.
@@ -276,7 +332,7 @@ enum SelfTest {
         let (noToken, _) = await http("POST", base + "/run", token: nil, body: ["task": task.name])
         log.check("A request without the token is refused", noToken == 401, "status \(noToken)")
 
-        await press(["all clear", "clear", "ac", "c"])
+        await press(clearNames)
         // Ask for a second run while the first is going: it must be told Deja Do is busy.
         let second = Task.detached { () -> Int in
             try? await Task.sleep(nanoseconds: 2_500_000_000)
@@ -319,7 +375,7 @@ enum SelfTest {
 
     static func replay(_ a: Automation, name: String, expect: String, vision: Bool, log: Log,
                        counted: Bool = true) async {
-        await press(["all clear", "clear", "ac", "c"])
+        await press(clearNames)
         let (error, notes) = await runTask(a, vision: vision)
         log.check(name + " finishes", error == nil, error ?? "", counted: counted)
         log.check(name + " shows \(expect)", displayShows(expect), "display: \(displayText())", counted: counted)
@@ -425,10 +481,11 @@ enum SelfTest {
 
     // MARK: Calculator
 
-    static func openCalculator() async -> Bool {
+    static func openCalculator(arguments: [String] = []) async -> Bool {
         let url = URL(fileURLWithPath: "/System/Applications/Calculator.app")
         let config = NSWorkspace.OpenConfiguration()
         config.activates = true
+        config.arguments = arguments
         _ = try? await NSWorkspace.shared.openApplication(at: url, configuration: config)
         for _ in 0..<40 {
             if let app = NSRunningApplication.runningApplications(withBundleIdentifier: calculatorID).first {
