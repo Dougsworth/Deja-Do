@@ -7,9 +7,14 @@ import AppKit
 // with a word.
 
 extension Font {
-    /// SF Pro Rounded: softer and friendlier than the default system face.
-    static func rounded(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
-        .system(size: size, weight: weight, design: .rounded)
+    /// SF Pro, the Mac's own face, so Deja Do reads as part of macOS.
+    static func ui(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
+        .system(size: size, weight: weight)
+    }
+
+    /// SF Mono, for shortcuts and step details only.
+    static func mono(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
+        .system(size: size, weight: weight, design: .monospaced)
     }
 }
 
