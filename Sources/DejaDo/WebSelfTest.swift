@@ -253,7 +253,8 @@ enum WebSelfTest {
         let config = NSWorkspace.OpenConfiguration()
         config.activates = true
         _ = try? await NSWorkspace.shared.open([url], withApplicationAt: browser, configuration: config)
-        for _ in 0..<80 {
+        // Up to 40 seconds: a browser starting from cold can take a while.
+        for _ in 0..<160 {
             try? await Task.sleep(nanoseconds: 250_000_000)
             if let app = NSRunningApplication.runningApplications(withBundleIdentifier: browserID).first {
                 AX.wake(pid: app.processIdentifier, bundleID: browserID)
