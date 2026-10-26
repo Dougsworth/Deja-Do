@@ -17,7 +17,7 @@ You need Xcode or the Xcode command line tools (`xcode-select --install`).
 
 The self test drives real apps with real mouse and keyboard events. Keep hands off for about seven minutes. `SUITE=calculator`, `SUITE=web` or `SUITE=apps` runs one part.
 
-- **Calculator.** Records 7 + 8 =, replays it as recorded, in the Scientific layout, after the window moves, and from the screen alone. Checks that a step whose screen doesn't match stops without repeating, that another app jumping in front is handled, and that Esc stops a long wait at once.
+- **Calculator.** Records 7 + 8 =, replays it as recorded, in the Scientific layout, after the window moves, and from the screen alone. Checks that a step whose screen doesn't match stops without repeating, that another app jumping in front is handled, that Esc stops a long wait at once, and that the task can be started over the local web address (no token refused, a run waited on, a second request told it's busy).
 - **Web form.** Deja Do serves itself a small form and opens it in Safari. The page can break itself the ways real sites do, and it counts every real submission, so "sent exactly once" is proven rather than assumed. One recording is replayed against fourteen versions: unchanged, button renamed, button relabelled to a different word, fields reordered and button moved, form loading late, result showing slowly, form below the fold, DOM ids random on each load, a lookalike button beside the real one, a cookie banner over the form (before and after Deja Do is shown how to close it), a new confirm dialog, all of the above at once, and the same form on a different website. Each must submit exactly once with the right values or stop with nothing sent. Submitting twice fails the whole run.
 - **Desktop apps.** Records typing and ⌘S in TextEdit, replays it into a new document (the text must land once), and checks a ⌘S whose result doesn't match stops without being pressed again. Also checks that a running Electron app describes its buttons once asked.
 
@@ -106,6 +106,30 @@ Deja Do assumes a run can go wrong and is built to stop cleanly rather than gues
 
 Safari, Chrome, Edge, Brave, Arc and Electron apps are read through the same Accessibility interface as native apps, once Deja Do asks them to switch it on. Each control's DOM id is used like an app's own identifier, so a button that is renamed or relabelled is still found. Ids that web frameworks make up at load time (`mui-12`, `:r3:`, `field-482`) are recognised and ignored. Popups that come and go on their own, like a browser's autofill list, are never taken as a step's result.
 
+## Starting tasks from other tools
+
+Turn on **Let tools on this Mac start tasks** in Settings and Deja Do listens at `http://127.0.0.1:7357`, on this Mac only. Every call except `/health` needs the token shown there (**Copy example request** copies a ready-made `curl` with it).
+
+```bash
+# What can be run, and the {{variables}} each task needs
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:7357/tasks
+
+# Run a task and wait for the result
+curl -X POST http://127.0.0.1:7357/run \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"task": "Send invoice", "values": {"client": "Ana", "amount": "120"}, "wait": true}'
+
+# Or start it, get a run id straight away, and be called back when it ends
+  -d '{"task": "Send invoice", "values": {...}, "callback": "http://localhost:5678/webhook/dejado-done"}'
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:7357/runs/<runId>
+```
+
+The result says `succeeded`, `failed` or `cancelled`, what each step did, and `mayHaveChangedThings`, which is true when a step that sends, saves or deletes may have run before a stop, so the caller knows not to simply retry. Typed values are never sent back. Callbacks carry `X-DejaDo-Signature: sha256=…`, an HMAC of the body keyed by the token, so the receiver can check they came from this Mac. While Deja Do is running or recording, a new request gets `409` with `retryAfter`.
+
+**n8n on the same Mac:** an HTTP Request node, method POST, URL `http://127.0.0.1:7357/run`, header `Authorization: Bearer <token>`, JSON body as above with `"wait": true`. The node's output is the run result.
+
+The address only answers on this Mac, refuses requests that come from a web page or through a rebound domain name, and is off until turned on. Cloud services such as Zapier and Make can't reach it directly; they need a relay, which is planned for the Deja Do server.
+
 ## Repair records
 
 Every time finding a step wasn't straightforward (a control was healed, AI picked one, it was found from the screen, it was clicked by position, or it wasn't found), Deja Do notes how the control was described then and now, and how each matching signal scored. Never typed text or field contents. The file stays on the Mac at `~/Library/Application Support/Deja Do/repairs.jsonl`, keeps the newest 5,000, and can be saved from Settings. It is the data the matcher's thresholds and weights get tuned from.
@@ -148,6 +172,7 @@ Keys are kept in the keychain. Only a text list of the window's elements is sent
 | `Sources/DejaDoCore/StepCheck.swift` | What a step changed, checking it on a run, retry decisions |
 | `Sources/DejaDoCore/Risk.swift`, `Safety.swift` | Risky steps, typing checks, repair guard, how a run ended |
 | `Sources/DejaDoCore/Corpus.swift` | Repair records |
+| `Sources/DejaDoCore/Webhooks.swift`, `Sources/DejaDo/WebhookServer.swift` | The local web address other tools start tasks through |
 | `Sources/DejaDo/SelfTest.swift`, `WebSelfTest.swift`, `AppsSelfTest.swift` | End to end tests on Calculator, Safari and TextEdit |
 | `Sources/DejaDo/TestServer.swift` | The breakable web form the web test uses |
 | `Sources/DejaDoCore/Settle.swift` | Knowing when a window has finished changing |
@@ -160,7 +185,7 @@ Keys are kept in the keychain. Only a text list of the window's elements is sent
 | `Sources/DejaDo/AIRepair.swift` | The question sent to the AI |
 | `server/` | The Deja Do AI server for Dokploy |
 | `Sources/DejaDo/ScreenVision.swift` | ScreenCaptureKit capture, Vision text reading, before and after reads |
-| `Tests/DejaDoCoreTests` | 141 engine, vision, step checking and safety tests. They also run on Linux |
+| `Tests/DejaDoCoreTests` | 161 engine, vision, step checking and safety tests. They also run on Linux |
 
 Automations are saved as JSON in `~/Library/Application Support/Deja Do/Automations`. Anything recorded while the app was called Once is copied over on first launch.
 
