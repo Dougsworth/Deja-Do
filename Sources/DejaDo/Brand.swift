@@ -30,7 +30,7 @@ enum Brand {
 
     // States, separate from the brand colour
     static let forest = dynamic(0x237A57, 0x4FB487)
-    static let amber = dynamic(0xA4660F, 0xE3A84A)
+    static let amber = dynamic(0x965C0C, 0xE3A84A)
     static let red = dynamic(0xC2362C, 0xF0695E)
 }
 
