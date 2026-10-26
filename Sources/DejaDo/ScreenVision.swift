@@ -59,28 +59,53 @@ enum ScreenVision {
         guard #available(macOS 14.0, *) else { return nil }
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-            let center = CGPoint(x: rect.midX, y: rect.midY)
-            guard let display = content.displays.first(where: { CGDisplayBounds($0.displayID).contains(center) })
-                    ?? content.displays.first else { return nil }
-            let bounds = CGDisplayBounds(display.displayID)
-            let shown = rect.intersection(bounds)
-            guard !shown.isNull, shown.width >= 1, shown.height >= 1 else { return nil }
+            let bounds = content.displays.map { CGDisplayBounds($0.displayID) }
+            // Every display the window is on, so one sitting across two comes out whole,
+            // and one whose centre falls in a gap between displays still comes out at all.
+            let pieces = ScreenGeometry.pieces(of: rect, on: bounds)
+            guard !pieces.isEmpty, let shown = ScreenGeometry.visible(rect, on: bounds) else { return nil }
 
             let me = ProcessInfo.processInfo.processIdentifier
             let own = content.applications.filter { $0.processID == me }
-            let filter = SCContentFilter(display: display, excludingApplications: own, exceptingWindows: [])
-            let config = SCStreamConfiguration()
-            config.sourceRect = shown.offsetBy(dx: -bounds.minX, dy: -bounds.minY)
-            // Full resolution, so small text still reads well.
-            let scale = CGFloat(filter.pointPixelScale)
-            config.width = max(1, Int((shown.width * scale).rounded()))
-            config.height = max(1, Int((shown.height * scale).rounded()))
-            config.showsCursor = false
-            let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-            return (image, shown)
+            var shots: [(CGImage, CGRect, CGFloat)] = []
+            for piece in pieces {
+                let display = content.displays[piece.display]
+                let filter = SCContentFilter(display: display, excludingApplications: own, exceptingWindows: [])
+                let config = SCStreamConfiguration()
+                config.sourceRect = piece.rect.offsetBy(dx: -bounds[piece.display].minX, dy: -bounds[piece.display].minY)
+                // Full resolution, so small text still reads well.
+                let scale = CGFloat(filter.pointPixelScale)
+                config.width = max(1, Int((piece.rect.width * scale).rounded()))
+                config.height = max(1, Int((piece.rect.height * scale).rounded()))
+                config.showsCursor = false
+                let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+                shots.append((image, piece.rect, scale))
+            }
+            if shots.count == 1 { return (shots[0].0, shots[0].1) }
+            return compose(shots, into: shown).map { ($0, shown) }
         } catch {
             return nil
         }
+    }
+
+    /// Puts the pieces from several displays into one picture of the window,
+    /// at the sharpest of their scales.
+    static func compose(_ shots: [(CGImage, CGRect, CGFloat)], into area: CGRect) -> CGImage? {
+        let scale = shots.map(\.2).max() ?? 1
+        let w = max(1, Int((area.width * scale).rounded())), h = max(1, Int((area.height * scale).rounded()))
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.setFillColor(CGColor(gray: 0.5, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        ctx.interpolationQuality = .high
+        for (image, rect, _) in shots {
+            // Core Graphics counts y from the bottom.
+            let x = (rect.minX - area.minX) * scale
+            let y = (area.maxY - rect.maxY) * scale
+            ctx.draw(image, in: CGRect(x: x, y: y, width: rect.width * scale, height: rect.height * scale))
+        }
+        return ctx.makeImage()
     }
 
     /// Greyscale copy at the given size in points, one pixel per point.

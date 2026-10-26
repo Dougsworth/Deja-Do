@@ -154,8 +154,9 @@ enum AX {
     static func isOwn(at point: CGPoint) -> Bool {
         let me = ProcessInfo.processInfo.processIdentifier
         if let hit = element(at: point) { return pid(hit) == me }
+        // NSScreen.screens.first is the display with the menu bar, which both spaces are measured from.
         let height = NSScreen.screens.first?.frame.height ?? 0
-        let flipped = NSPoint(x: point.x, y: height - point.y)
+        let flipped = ScreenGeometry.flip(point, mainDisplayHeight: height)
         return NSApp.windows.contains { $0.isVisible && $0.frame.contains(flipped) }
     }
 

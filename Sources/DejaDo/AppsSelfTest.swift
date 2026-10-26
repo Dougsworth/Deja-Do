@@ -16,12 +16,18 @@ import ApplicationServices
 enum AppsSelfTest {
     static let textEditID = "com.apple.TextEdit"
     static let sentence = "Deja Do typed this."
+    /// What TextEdit calls a new document, in English and Spanish.
+    static let untitled = ["Untitled", "Sin título"]
+    static func isUntitled(_ title: String) -> Bool { untitled.contains { title.hasPrefix($0) } }
 
     static func run(_ log: SelfTest.Log, vision: Bool) async -> Bool {
         let failuresBefore = log.failures
         log.line("Desktop apps")
         await electron(log)
         await textEdit(log, vision: vision)
+        await textEditInSpanish(log, vision: vision)
+        await SlackSelfTest.run(log, vision: vision)
+        await ExcelSelfTest.run(log, vision: vision)
         return log.failures == failuresBefore
     }
 
@@ -96,12 +102,35 @@ enum AppsSelfTest {
 
     // MARK: TextEdit
 
-    static func textEdit(_ log: SelfTest.Log, vision: Bool) async {
-        guard await openTextEdit() else {
-            log.check("TextEdit opens with a new document", false)
+    /// TextEdit opened in Spanish, the way it looks on a Mac set to Spanish.
+    /// Only done when none of the person's own TextEdit documents are open,
+    /// because TextEdit has to be quit and reopened to change language.
+    static func textEditInSpanish(_ log: SelfTest.Log, vision: Bool) async {
+        if let running = app() {
+            let theirs = windowTitles().filter { !isUntitled($0) }
+            guard theirs.isEmpty, windowTitles().isEmpty else {
+                log.check("TextEdit in Spanish", true, "your own TextEdit documents are open, skipped so they aren't touched", counted: false)
+                return
+            }
+            running.terminate()
+            for _ in 0..<20 where app() != nil { try? await Task.sleep(nanoseconds: 250_000_000) }
+            guard app() == nil else {
+                log.check("TextEdit in Spanish", true, "TextEdit didn't quit, skipped", counted: false)
+                return
+            }
+        }
+        log.line("TextEdit in Spanish")
+        await textEdit(log, vision: vision, arguments: ["-AppleLanguages", "(es)"], prefix: "Spanish: ")
+        // Leave it closed rather than in Spanish.
+        if windowTitles().isEmpty { app()?.terminate() }
+    }
+
+    static func textEdit(_ log: SelfTest.Log, vision: Bool, arguments: [String] = [], prefix: String = "") async {
+        guard await openTextEdit(arguments: arguments) else {
+            log.check(prefix + "TextEdit opens with a new document", false)
             return
         }
-        log.check("TextEdit opens with a new document", true)
+        log.check(prefix + "TextEdit opens with a new document", true, frontTitle() ?? "")
         // Only the documents this test makes are ever closed. TextEdit may well
         // have the person's own files open, and those are not touched.
         var mine = Set<String>()
@@ -127,9 +156,9 @@ enum AppsSelfTest {
         let steps: [Step] = await withCheckedContinuation { cont in
             DispatchQueue.main.async { recorder.finish { cont.resume(returning: $0) } }
         }
-        log.check("Found the page while recording", acted)
-        log.check("⌘S opened the Save sheet while recording", sheetSeen)
-        log.check("Recording typed the sentence once", occurrences(of: sentence) == 1, "document: “\(documentText().prefix(60))”")
+        log.check(prefix + "Found the page while recording", acted)
+        log.check(prefix + "⌘S opened the Save sheet while recording", sheetSeen)
+        log.check(prefix + "Recording typed the sentence once", occurrences(of: sentence) == 1, "document: “\(documentText().prefix(60))”")
         let kinds = steps.map { step -> String in
             switch step.kind {
             case .click: return "click"
@@ -139,12 +168,12 @@ enum AppsSelfTest {
             case .wait: return "wait"
             }
         }
-        log.check("Recorded a click, typing and two key presses", kinds.filter { $0 == "type" }.count == 1 && kinds.filter { $0 == "key" }.count == 2,
+        log.check(prefix + "Recorded a click, typing and two key presses", kinds.filter { $0 == "type" }.count == 1 && kinds.filter { $0 == "key" }.count == 2,
                   steps.map(\.summary).joined(separator: " | "))
         let task = Automation(name: "Self test TextEdit", steps: steps)
         if let i = task.steps.firstIndex(where: { if case .key = $0.kind { return true }; return false }) {
-            log.check("⌘S is recognised as a risky step", task.risk(at: i).risk == .risky, task.risk(at: i).reason ?? "")
-            log.check("Recorded that ⌘S opens the sheet", task.steps[i].expect.map { !$0.appeared.isEmpty || $0.windowTitle != nil } == true,
+            log.check(prefix + "⌘S is recognised as a risky step", task.risk(at: i).risk == .risky, task.risk(at: i).reason ?? "")
+            log.check(prefix + "Recorded that ⌘S opens the sheet", task.steps[i].expect.map { !$0.appeared.isEmpty || $0.windowTitle != nil } == true,
                       task.steps[i].expect?.summary ?? "nothing")
         }
         guard acted, sheetSeen else {
@@ -153,11 +182,11 @@ enum AppsSelfTest {
         }
 
         // Replay into a fresh document.
-        guard await newDocument() else { log.check("A second document opens", false); await closeDocuments(mine); return }
+        guard await newDocument() else { log.check(prefix + "A second document opens", false); await closeDocuments(mine); return }
         if let t = frontTitle() { mine.insert(t) }
         let (error, notes) = await SelfTest.runTask(task, vision: vision)
         let once = occurrences(of: sentence) == 1
-        log.check("Replay types the sentence exactly once and closes the sheet", error == nil && once && !sheetShowing(),
+        log.check(prefix + "Replay types the sentence exactly once and closes the sheet", error == nil && once && !sheetShowing(),
                   (error ?? "finished") + " · document: “\(documentText().prefix(60))” · \(sheetReason() ?? "no Save panel")")
         log.line("      notes: \(notes)")
         if sheetShowing() { key(53, command: false); try? await Task.sleep(nanoseconds: 800_000_000) }
@@ -171,13 +200,13 @@ enum AppsSelfTest {
             broken.steps[i].expect = e
             broken.steps[i].onMismatch = .retryThenStop
         }
-        guard await newDocument() else { log.check("A third document opens", false); await closeDocuments(mine); return }
+        guard await newDocument() else { log.check(prefix + "A third document opens", false); await closeDocuments(mine); return }
         if let t = frontTitle() { mine.insert(t) }
         let (stopError, stopNotes) = await SelfTest.runTask(broken, vision: vision)
-        log.check("A ⌘S whose result doesn't match stops the run without being repeated",
+        log.check(prefix + "A ⌘S whose result doesn't match stops the run without being repeated",
                   stopError?.contains("Sent to Ana") == true && !stopNotes.contains("trying once more") && occurrences(of: sentence) == 1,
                   (stopError ?? "the run finished, it should have stopped") + " · document: “\(documentText().prefix(60))”")
-        log.check("…and the stop says it may already have saved", stopError?.contains("may already have") == true, stopError ?? "")
+        log.check(prefix + "…and the stop says it may already have saved", stopError?.contains("may already have") == true, stopError ?? "")
         log.line("      notes: \(stopNotes)")
         if sheetShowing() { key(53, command: false); try? await Task.sleep(nanoseconds: 800_000_000) }
 
@@ -233,7 +262,7 @@ enum AppsSelfTest {
         }
         if let f = AX.element(el, kAXFocusedWindowAttribute), let m = mainWindow(), !CFEqual(f, m) {
             let texts = AX.collect(from: f, origin: nil, limit: 300) { $0 == "AXStaticText" || $0 == "AXButton" }
-            if texts.contains(where: { ($0.node.label ?? "").hasPrefix("Save As") }) {
+            if texts.contains(where: { l in ["Save As", "Guardar como"].contains { (l.node.label ?? "").hasPrefix($0) } }) {
                 return "Save window “\(AX.string(f, kAXTitleAttribute) ?? "")” in front"
             }
         }
@@ -242,10 +271,11 @@ enum AppsSelfTest {
 
     static func sheetShowing() -> Bool { sheetReason() != nil }
 
-    static func openTextEdit() async -> Bool {
+    static func openTextEdit(arguments: [String] = []) async -> Bool {
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: textEditID) else { return false }
         let config = NSWorkspace.OpenConfiguration()
         config.activates = true
+        config.arguments = arguments
         _ = try? await NSWorkspace.shared.openApplication(at: url, configuration: config)
         for _ in 0..<40 {
             try? await Task.sleep(nanoseconds: 250_000_000)
@@ -268,7 +298,7 @@ enum AppsSelfTest {
         key(45, command: true)   // ⌘N
         for _ in 0..<30 {
             try? await Task.sleep(nanoseconds: 250_000_000)
-            guard let t = frontTitle(), t.hasPrefix("Untitled"), !before.contains(t), textArea() != nil else { continue }
+            guard let t = frontTitle(), isUntitled(t), !before.contains(t), textArea() != nil else { continue }
             try? await Task.sleep(nanoseconds: 500_000_000)
             return true
         }
@@ -296,7 +326,7 @@ enum AppsSelfTest {
     static func closeDocuments(_ titles: Set<String>) async {
         guard let el = appElement() else { return }
         for w in AX.elements(AX.raw(el, kAXWindowsAttribute)) {
-            guard let title = AX.string(w, kAXTitleAttribute), titles.contains(title), title.hasPrefix("Untitled") else { continue }
+            guard let title = AX.string(w, kAXTitleAttribute), titles.contains(title), isUntitled(title) else { continue }
             AXUIElementSetAttributeValue(w, kAXMainAttribute as CFString, kCFBooleanTrue)
             app()?.activate(options: [.activateIgnoringOtherApps])
             try? await Task.sleep(nanoseconds: 300_000_000)
@@ -305,7 +335,7 @@ enum AppsSelfTest {
                 try? await Task.sleep(nanoseconds: 250_000_000)
                 guard let sheet = AX.elements(AX.raw(w, kAXChildrenAttribute)).first(where: { AX.role($0) == "AXSheet" }) else { continue }
                 let buttons = AX.collect(from: sheet, origin: nil, limit: 200) { $0 == "AXButton" }
-                if let delete = buttons.first(where: { ($0.node.label ?? "").lowercased() == "delete" }) {
+                if let delete = buttons.first(where: { ["delete", "eliminar", "borrar"].contains(($0.node.label ?? "").lowercased()) }) {
                     AX.perform(delete.element, kAXPressAction)
                 }
                 break

@@ -2,7 +2,7 @@ import AppKit
 import ApplicationServices
 @preconcurrency import DejaDoCore
 
-/// End to end checks against a web form in Safari, served by Deja Do itself
+/// End to end checks against a web form in Safari and Chrome, served by Deja Do itself
 /// (see TestServer). One recording of "fill the form and press Submit" is
 /// replayed against every way the page can break, and the server's own
 /// counter says whether the form was submitted exactly once, never, or twice.
@@ -12,7 +12,21 @@ import ApplicationServices
 /// that acting would be a guess.
 enum WebSelfTest {
     static let safariID = "com.apple.Safari"
+    static let chromeID = "com.google.Chrome"
     static let pageTitle = "Deja Do test form"
+
+    /// The browser the current suite drives.
+    final class Current: @unchecked Sendable {
+        private let lock = NSLock()
+        private var id = WebSelfTest.safariID
+        var browserID: String {
+            get { lock.lock(); defer { lock.unlock() }; return id }
+            set { lock.lock(); id = newValue; lock.unlock() }
+        }
+    }
+    static let current = Current()
+    static var browserID: String { current.browserID }
+    static var browserName: String { browserID == chromeID ? "Chrome" : "Safari" }
 
     enum Rule {
         /// The form must go through once, with the right values.
@@ -51,7 +65,6 @@ enum WebSelfTest {
 
     static func run(_ log: SelfTest.Log, vision: Bool) async -> Bool {
         let failuresBefore = log.failures
-        log.line("Web form in Safari")
         let server = TestServer()
         guard server.start() else {
             log.check("Test page server starts", false)
@@ -60,20 +73,79 @@ enum WebSelfTest {
         log.check("Test page server starts", true, "port \(server.port)")
         defer { server.stop() }
 
-        guard NSWorkspace.shared.urlForApplication(withBundleIdentifier: safariID) != nil else {
-            log.check("Safari is installed", false)
-            return false
+        for id in [safariID, chromeID] {
+            guard NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) != nil else {
+                log.check("Web form in \(id == chromeID ? "Chrome" : "Safari")", true, "not installed, skipped", counted: false)
+                continue
+            }
+            current.browserID = id
+            log.line("Web form in \(browserName)")
+            let opened = Counter()
+            server.reset()
+            guard await open(server.url(breaks: []), waitForButton: true) else {
+                log.check("\(browserName) shows the test page", false, "front app \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "none")")
+                continue
+            }
+            opened.add()
+            log.check("\(browserName) shows the test page", true)
+            _ = await replays(log, server: server, vision: vision, opened: opened)
+            if id == safariID { _ = await spanish(log, server: server, vision: vision, opened: opened) }
+            await closeTabs(opened.value)
         }
-        let opened = Counter()
-        guard await open(server.url(breaks: []), waitForButton: true) else {
-            log.check("Safari shows the test page", false, "front app \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "none")")
+        current.browserID = safariID
+        return log.failures == failuresBefore
+    }
+
+    /// The same form in Spanish: recorded and replayed with Spanish labels, so
+    /// nothing about finding things or spotting risky steps leans on English.
+    static func spanish(_ log: SelfTest.Log, server: TestServer, vision: Bool, opened: Counter) async -> Bool {
+        let failuresBefore = log.failures
+        log.line("Web form in Spanish")
+        server.reset()
+        guard await open(server.url(breaks: [], spanish: true), waitForButton: true) else {
+            log.check("The Spanish page loads", false)
             return false
         }
         opened.add()
-        log.check("Safari shows the test page", true)
-        let passed = await replays(log, server: server, vision: vision, opened: opened)
-        await closeTabs(opened.value)
-        return passed && log.failures == failuresBefore
+        let recorder = await MainActor.run { () -> Recorder in
+            let r = Recorder()
+            r.visionEnabled = vision
+            r.checkSteps = true
+            _ = r.start()
+            return r
+        }
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        var acted = await click(field: "Nombre")
+        acted = type("Ana") && acted
+        acted = await click(field: "Correo") && acted
+        acted = type("ana@example.com") && acted
+        acted = await click(button: "Enviar") && acted
+        try? await Task.sleep(nanoseconds: 1_200_000_000)
+        let steps: [Step] = await withCheckedContinuation { cont in
+            DispatchQueue.main.async { recorder.finish { cont.resume(returning: $0) } }
+        }
+        log.check("Recorded the Spanish form", acted && server.state.submits == 1, steps.map(\.summary).joined(separator: " | "))
+        let task = Automation(name: "Self test Spanish form", steps: steps)
+        guard let i = task.steps.lastIndex(where: { if case .click = $0.kind { return true }; return false }), acted else { return false }
+        log.check("“Enviar” is recognised as a risky step", task.risk(at: i).risk == .risky, task.risk(at: i).reason ?? "not flagged")
+        log.check("Recorded what “Enviar” changed", task.steps[i].expect.map { !$0.appeared.isEmpty } == true,
+                  task.steps[i].expect?.summary ?? "nothing")
+        for (name, breaks) in [("Spanish page, same", [TestServer.Break]()), ("Spanish page, fields reordered and button moved", [.move]),
+                               ("Spanish page, button renamed to “Enviar solicitud”", [.rename])] {
+            server.reset()
+            guard await open(server.url(breaks: breaks, spanish: true), waitForButton: true) else {
+                log.check(name, false, "the page didn't load")
+                continue
+            }
+            opened.add()
+            let (error, notes) = await SelfTest.runTask(task, vision: vision)
+            let s = server.state
+            log.check(name, error == nil && s.submits == 1 && s.lastName == "Ana",
+                      "submits \(s.submits)" + (error.map { " · stopped: \($0)" } ?? ""))
+            if s.submits > 1 { log.line("      SUBMITTED TWICE, this must never happen") }
+            log.line("      notes: \(notes)")
+        }
+        return log.failures == failuresBefore
     }
 
     final class Counter: @unchecked Sendable {
@@ -172,20 +244,23 @@ enum WebSelfTest {
         return log.failures == failuresBefore
     }
 
-    // MARK: Safari
+    // MARK: The browser
 
-    /// Opens the page in Safari and waits until it's showing.
+    /// Opens the page in the current browser and waits until it's showing.
     static func open(_ url: URL, waitForButton: Bool) async -> Bool {
-        guard let safari = NSWorkspace.shared.urlForApplication(withBundleIdentifier: safariID) else { return false }
+        guard let browser = NSWorkspace.shared.urlForApplication(withBundleIdentifier: browserID) else { return false }
         let config = NSWorkspace.OpenConfiguration()
         config.activates = true
-        _ = try? await NSWorkspace.shared.open([url], withApplicationAt: safari, configuration: config)
-        for _ in 0..<60 {
+        _ = try? await NSWorkspace.shared.open([url], withApplicationAt: browser, configuration: config)
+        for _ in 0..<80 {
             try? await Task.sleep(nanoseconds: 250_000_000)
+            if let app = NSRunningApplication.runningApplications(withBundleIdentifier: browserID).first {
+                AX.wake(pid: app.processIdentifier, bundleID: browserID)
+            }
             guard let w = window(), AX.string(w, kAXTitleAttribute)?.contains(pageTitle) == true else { continue }
-            if !waitForButton || find(role: "AXButton", labelled: ["Submit", "Submit request", "Send"]) != nil {
+            if !waitForButton || find(role: "AXButton", labelled: ["Submit", "Submit request", "Send", "Enviar", "Enviar solicitud"]) != nil {
                 try? await Task.sleep(nanoseconds: 700_000_000)
-                NSRunningApplication.runningApplications(withBundleIdentifier: safariID).first?
+                NSRunningApplication.runningApplications(withBundleIdentifier: browserID).first?
                     .activate(options: [.activateIgnoringOtherApps])
                 return true
             }
@@ -194,7 +269,7 @@ enum WebSelfTest {
     }
 
     static func window() -> AXUIElement? {
-        guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: safariID).first else { return nil }
+        guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: browserID).first else { return nil }
         let el = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(el, 1.0)
         let windows = AX.elements(AX.raw(el, kAXWindowsAttribute))
@@ -210,8 +285,19 @@ enum WebSelfTest {
         }
     }
 
+    /// The text field named `label`, or else the one just below the text `label`,
+    /// for browsers that don't pass the form's label on to the field.
+    static func field(_ label: String) -> AX.Found? {
+        if let f = find(role: "AXTextField", labelled: [label]) { return f }
+        guard let w = window(), let text = AX.collect(from: w, origin: nil, limit: 1500, include: { $0 == "AXStaticText" })
+                .first(where: { $0.node.label?.lowercased() == label.lowercased() }), let tf = text.node.frame else { return nil }
+        return AX.collect(from: w, origin: nil, limit: 1500) { $0 == "AXTextField" }
+            .filter { ($0.node.frame?.minY ?? -1) >= tf.minY }
+            .min { abs(($0.node.frame?.minY ?? 0) - tf.maxY) < abs(($1.node.frame?.minY ?? 0) - tf.maxY) }
+    }
+
     static func click(field: String) async -> Bool {
-        guard let f = find(role: "AXTextField", labelled: [field]), let frame = f.node.frame else { return false }
+        guard let f = Self.field(field), let frame = f.node.frame else { return false }
         Input.click(at: CGPoint(x: frame.midX, y: frame.midY), button: .left, count: 1, modifiers: 0)
         try? await Task.sleep(nanoseconds: 900_000_000)
         return true
@@ -235,18 +321,22 @@ enum WebSelfTest {
     static func bannerRule() async -> PopupRule? {
         guard let f = find(role: "AXButton", labelled: ["Got it"]),
               let locator = AX.makeLocator(for: f.element, pid: AX.pid(f.element), clickPoint: nil) else { return nil }
-        return PopupRule(name: "Cookie banner", bundleID: safariID,
+        return PopupRule(name: "Cookie banner", bundleID: browserID,
                          detect: ["We use cookies to make this page work."], dismiss: .click(target: locator))
     }
 
     static func closeTabs(_ count: Int) async {
-        guard count > 0, let app = NSRunningApplication.runningApplications(withBundleIdentifier: safariID).first else { return }
+        guard count > 0, let app = NSRunningApplication.runningApplications(withBundleIdentifier: browserID).first else { return }
         app.activate(options: [.activateIgnoringOtherApps])
         try? await Task.sleep(nanoseconds: 400_000_000)
-        for _ in 0..<count {
-            guard window() != nil else { break }
+        // Only ever close a tab that is showing the test page, never one of the person's own.
+        let el = AXUIElementCreateApplication(app.processIdentifier)
+        for _ in 0..<(count + 2) {
+            guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == browserID,
+                  let front = AX.element(el, kAXFocusedWindowAttribute),
+                  AX.string(front, kAXTitleAttribute)?.contains(pageTitle) == true else { break }
             Input.key(13, modifiers: CGEventFlags.maskCommand.rawValue)   // ⌘W
-            try? await Task.sleep(nanoseconds: 250_000_000)
+            try? await Task.sleep(nanoseconds: 350_000_000)
         }
     }
 }

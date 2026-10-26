@@ -91,13 +91,16 @@ final class TestServer: @unchecked Sendable {
         listener = nil
     }
 
-    func url(breaks: [Break], host: String = "127.0.0.1") -> URL {
+    func url(breaks: [Break], host: String = "127.0.0.1", spanish: Bool = false) -> URL {
         var c = URLComponents()
         c.scheme = "http"
         c.host = host
         c.port = Int(port)
         c.path = "/form"
-        if !breaks.isEmpty { c.queryItems = [URLQueryItem(name: "break", value: breaks.map(\.rawValue).joined(separator: ","))] }
+        var items: [URLQueryItem] = []
+        if !breaks.isEmpty { items.append(URLQueryItem(name: "break", value: breaks.map(\.rawValue).joined(separator: ","))) }
+        if spanish { items.append(URLQueryItem(name: "lang", value: "es")) }
+        if !items.isEmpty { c.queryItems = items }
         return c.url!
     }
 
@@ -145,7 +148,8 @@ final class TestServer: @unchecked Sendable {
         case ("GET", "/form"):
             let names = comps?.queryItems?.first { $0.name == "break" }?.value ?? ""
             let breaks = Set(names.split(separator: ",").compactMap { Break(rawValue: String($0)) })
-            return http(200, "text/html; charset=utf-8", page(breaks))
+            let es = comps?.queryItems?.first { $0.name == "lang" }?.value == "es"
+            return http(200, "text/html; charset=utf-8", page(breaks, es: es))
         case ("POST", "/event"):
             record(body)
             return http(200, "application/json", "{\"ok\":true}")
@@ -184,9 +188,12 @@ final class TestServer: @unchecked Sendable {
 
     // MARK: The page
 
-    private func page(_ b: Set<Break>) -> String {
+    /// The page in English, or in Spanish when `es` is set: the same form,
+    /// the way a site looks on a Mac set to another language.
+    private func page(_ b: Set<Break>, es: Bool = false) -> String {
+        func t(_ en: String, _ sp: String) -> String { es ? sp : en }
         // Plain, legible, and the same every time unless a break says otherwise.
-        let submitText = b.contains(.rename) ? "Submit request" : (b.contains(.relabel) ? "Send" : "Submit")
+        let submitText = b.contains(.rename) ? t("Submit request", "Enviar solicitud") : (b.contains(.relabel) ? t("Send", "Mandar") : t("Submit", "Enviar"))
         let ids = b.contains(.idswap)
             ? (name: "f\(Int.random(in: 10000...99999))", email: "f\(Int.random(in: 10000...99999))", submit: "b\(Int.random(in: 10000...99999))")
             : (name: "name", email: "email", submit: "submit")
@@ -201,12 +208,12 @@ final class TestServer: @unchecked Sendable {
             </div>
             """ : ""
         let fields = """
-            <p><label for=\(ids.name)>Name</label><br><input id=\(ids.name) autocomplete=off></p>
-            <p><label for=\(ids.email)>Email</label><br><input id=\(ids.email) autocomplete=off></p>
+            <p><label for=\(ids.name)>\(t("Name", "Nombre"))</label><br><input id=\(ids.name) autocomplete=off></p>
+            <p><label for=\(ids.email)>\(t("Email", "Correo"))</label><br><input id=\(ids.email) autocomplete=off></p>
             """
         let fieldsMoved = """
-            <p><label for=\(ids.email)>Email</label><br><input id=\(ids.email) autocomplete=off></p>
-            <p><label for=\(ids.name)>Name</label><br><input id=\(ids.name) autocomplete=off></p>
+            <p><label for=\(ids.email)>\(t("Email", "Correo"))</label><br><input id=\(ids.email) autocomplete=off></p>
+            <p><label for=\(ids.name)>\(t("Name", "Nombre"))</label><br><input id=\(ids.name) autocomplete=off></p>
             """
         let button = "<button type=button id=\(ids.submit) onclick=\"submit()\">\(submitText)</button>"
         let form = b.contains(.move) ? """
@@ -218,7 +225,7 @@ final class TestServer: @unchecked Sendable {
 
         return """
         <!doctype html>
-        <html><head><meta charset=utf-8><title>Deja Do test form</title>
+        <html lang=\(t("en", "es"))><head><meta charset=utf-8><title>Deja Do test form</title>
         <style>
           body{font:17px -apple-system,Helvetica,sans-serif;color:#111;background:#fff;margin:0;padding:48px 64px;max-width:720px}
           h1{font-size:28px;font-weight:600;margin:0 0 28px}
@@ -231,7 +238,7 @@ final class TestServer: @unchecked Sendable {
         </style></head>
         <body>
         \(spacer)
-        <h1>Request access</h1>
+        <h1>\(t("Request access", "Solicitar acceso"))</h1>
         <div id=form \(hidden)>\(form)</div>
         <div id=thanks></div>
         \(banner)
@@ -243,7 +250,7 @@ final class TestServer: @unchecked Sendable {
           function thanks(name, n){
             document.getElementById('form').remove();
             const t=document.getElementById('thanks');
-            t.textContent='Thanks, '+(name||'friend')+'. Request #'+n+' received.';
+            t.textContent=\(es ? "'Gracias, '+(name||'amigo')+'. Solicitud n.º '+n+' recibida.'" : "'Thanks, '+(name||'friend')+'. Request #'+n+' received.'");
           }
           let count=0;
           function finish(){

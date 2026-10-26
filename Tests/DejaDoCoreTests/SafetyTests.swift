@@ -26,6 +26,21 @@ final class RiskTests: XCTestCase {
         }
     }
 
+    func testWriteButtonsInOtherLanguagesAreRisky() {
+        for label in ["Enviar", "Guardar cambios", "Eliminar", "Envoyer", "Enregistrer", "Supprimer", "Payer maintenant",
+                      "Senden", "Speichern", "Löschen", "Jetzt bezahlen", "Salvar", "Excluir", "Invia", "Salva",
+                      "Verzenden", "Opslaan", "Bestätigen", "Confirmer la commande"] {
+            let g = RiskGuesser.guess([click(label)], at: 0)
+            XCTAssertEqual(g.risk, .risky, label)
+            XCTAssertNotNil(g.reason, label)
+        }
+        // Everyday buttons in those languages, including the ones that mean "clear".
+        for label in ["Buscar", "Siguiente", "Cancelar", "Borrar", "Effacer", "Suivant", "Weiter", "Abbrechen",
+                      "Apagar", "Cancella", "Nombre", "Ajustes", "Einstellungen", "Volgende"] {
+            XCTAssertEqual(RiskGuesser.guess([click(label)], at: 0).risk, .normal, label)
+        }
+    }
+
     func testReturnAfterTypingSends() {
         let steps = [click("Kris"), type("thank you"), key(36, label: "Return")]
         let g = RiskGuesser.guess(steps, at: 2)

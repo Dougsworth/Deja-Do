@@ -234,6 +234,9 @@ enum SelfTest {
                       right || safeStop, right ? "display: 15" : (sciError ?? "finished with display \(displayText())"))
             log.line("      notes: \(sciNotes)")
             await setMode(basic: true)
+
+            // On a second display: the window dragged onto it, replayed by Accessibility and from the screen alone.
+            await otherDisplay(task, screenOnly: screenOnly, log: log)
         }
 
         await webhook(task, vision: vision, log: log)
@@ -321,6 +324,40 @@ enum SelfTest {
         log.check(name + " finishes", error == nil, error ?? "", counted: counted)
         log.check(name + " shows \(expect)", displayShows(expect), "display: \(displayText())", counted: counted)
         log.line("      notes: \(notes)")
+    }
+
+    /// Displays in the Accessibility space (origin top left of the main display).
+    static func displayBounds() -> [CGRect] {
+        var count: UInt32 = 0
+        CGGetActiveDisplayList(0, nil, &count)
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        CGGetActiveDisplayList(count, &ids, &count)
+        return ids.prefix(Int(count)).map { CGDisplayBounds($0) }
+    }
+
+    static func otherDisplay(_ task: Automation, screenOnly: Automation, log: Log) async {
+        let displays = displayBounds()
+        guard displays.count > 1, let before = window().flatMap({ AX.frame($0) }) else {
+            log.check("Works on a second display", true, "only one display connected, skipped", counted: false)
+            return
+        }
+        let home = ScreenGeometry.mainDisplay(for: before, on: displays) ?? 0
+        guard let target = displays.indices.first(where: { $0 != home }).map({ displays[$0] }) else { return }
+        // Drag the title bar so the window ends up in the middle of the other display.
+        let d = CGVector(dx: target.midX - before.midX, dy: target.midY - before.midY)
+        await dragWindow(before, by: d)
+        let moved = window().flatMap { AX.frame($0) }
+        let onTarget = moved.flatMap { ScreenGeometry.mainDisplay(for: $0, on: displays) }.map { displays[$0] == target } ?? false
+        log.line("      window moved from \(describe(before)) to \(describe(moved)) on display at \(Int(target.minX)),\(Int(target.minY))")
+        guard onTarget else {
+            log.check("Works on a second display", false, "couldn't move the window onto it")
+            return
+        }
+        await replay(task, name: "On the second display", expect: "15", vision: true, log: log)
+        await replay(screenOnly, name: "On the second display from the screen alone", expect: "15", vision: true, log: log)
+        if let now = window().flatMap({ AX.frame($0) }) {
+            await dragWindow(now, by: CGVector(dx: before.midX - now.midX, dy: before.midY - now.midY))
+        }
     }
 
     /// Moves the window the way a person does: dragging its title bar.

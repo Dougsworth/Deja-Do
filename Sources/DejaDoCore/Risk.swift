@@ -90,14 +90,42 @@ public enum RiskGuesser {
         }
     }
 
+    /// The same idea in Spanish, French, German, Portuguese, Italian and Dutch,
+    /// written without accents because labels are compared after folding them.
+    /// Words that also mean "clear" (borrar, effacer, apagar, cancella) are left
+    /// out, so a calculator's clear key in those languages isn't flagged.
+    static let otherLanguages: [String: String] = {
+        var m: [String: String] = [:]
+        func add(_ kind: String, _ words: String) { for w in words.split(separator: ",") { m[String(w)] = kind } }
+        add("send", "enviar,envia,envie,envoyer,envoie,senden,absenden,abschicken,invia,inviare,verzenden,versturen,verstuur,responder,repondre,antworten,rispondi,beantwoorden,publicar,publier,veroffentlichen,pubblica,publiceren,compartir,partager,teilen,condividi,compartilhar,partilhar,delen,invitar,inviter,einladen,invita,convidar,uitnodigen")
+        add("delete", "eliminar,supprimer,loschen,entfernen,elimina,excluir,verwijderen,descartar,abandonner,verwerfen,scarta,archivar,archiver,archivieren,archivia,arquivar,archiveren")
+        add("pay", "pagar,payer,bezahlen,zahlen,paga,betalen,comprar,acheter,kaufen,acquista,kopen,bestellen,commander,ordina,transferir,transferer,uberweisen,trasferisci,overmaken")
+        add("save", "guardar,enregistrer,sauvegarder,speichern,sichern,salva,salvare,salvar,opslaan,exportar,exporter,exportieren,esporta,exporteren")
+        add("submit", "confirmar,confirmer,valider,bestatigen,conferma,bevestigen,soumettre,einreichen,indienen,aprobar,approuver,genehmigen,approva,aprovar,goedkeuren,registrarse,inscrire,registrieren,registrati,cadastrar,registreren")
+        return m
+    }()
+
     static func firstWriteWord(in text: String) -> String? {
         let range = NSRange(text.startIndex..., in: text)
-        guard let m = writeRE.firstMatch(in: text, range: range), let r = Range(m.range, in: text) else { return nil }
-        return String(text[r]).lowercased()
+        if let m = writeRE.firstMatch(in: text, range: range), let r = Range(m.range, in: text) {
+            return String(text[r]).lowercased()
+        }
+        for word in TextSimilarity.tokens(TextSimilarity.normalize(text)) where otherLanguages[word] != nil {
+            return word
+        }
+        return nil
     }
 
     static func verbPhrase(_ word: String) -> String {
         let w = word.lowercased()
+        switch otherLanguages[w] {
+        case "send": return "sends something (“\(word)”)"
+        case "delete": return "deletes something (“\(word)”)"
+        case "pay": return "pays or orders (“\(word)”)"
+        case "save": return "saves a file (“\(word)”)"
+        case "submit": return "submits or changes something (“\(word)”)"
+        default: break
+        }
         if w.hasPrefix("send") || w == "reply" || w == "post" || w.hasPrefix("publish") || w == "share" || w == "invite" { return "sends something" }
         if w.hasPrefix("delet") || w.hasPrefix("remov") || w == "trash" || w == "empty" || w.hasPrefix("discard") || w == "move to bin" { return "deletes something" }
         if w.hasPrefix("pay") || w.hasPrefix("purchas") || w.contains("order") || w.contains("check") || w == "book" || w.hasPrefix("transfer") { return "pays or orders" }
