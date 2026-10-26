@@ -596,6 +596,7 @@ struct AutomationView: View {
                             if model.beforeRepair[step.id] != nil {
                                 Button("Undo the AI fix") { model.undoRepair(automation: automation.id, step: step.id) }
                             }
+                            Button("Add text to type after") { insertText(after: step) }
                             Button("Add a 2 second wait after") { insertWait(after: step) }
                             Divider()
                             Button("Delete step", role: .destructive) { remove(step) }
@@ -603,6 +604,14 @@ struct AutomationView: View {
                 }
                 .onMove { automation.steps.move(fromOffsets: $0, toOffset: $1) }
                 .onDelete { automation.steps.remove(atOffsets: $0) }
+                if !automation.steps.isEmpty && model.runningID == nil {
+                    Text("Click a step to change it. Drag to reorder, or right click to skip, delete or add a step.")
+                        .font(.ui(11))
+                        .foregroundStyle(.tertiary)
+                        .padding(.vertical, 12)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 0, leading: Metrics.gutter + 26, bottom: 0, trailing: Metrics.gutter))
+                }
                 ForEach(automation.popups ?? []) { rule in
                     SuggestionLine(text: "When “\(rule.name)” shows up, \(rule.dismiss.summary) and carry on.",
                                    accept: nil, accepted: {}) {
@@ -694,7 +703,16 @@ struct AutomationView: View {
 
     private func insertWait(after step: Step) {
         guard let i = automation.steps.firstIndex(where: { $0.id == step.id }) else { return }
-        automation.steps.insert(Step(kind: .wait(seconds: 2)), at: i + 1)
+        let wait = Step(kind: .wait(seconds: 2))
+        automation.steps.insert(wait, at: i + 1)
+        expanded = wait.id
+    }
+
+    private func insertText(after step: Step) {
+        guard let i = automation.steps.firstIndex(where: { $0.id == step.id }) else { return }
+        let text = Step(kind: .type(text: "", askEachRun: false, secret: false, prompt: ""))
+        automation.steps.insert(text, at: i + 1)
+        expanded = text.id
     }
 }
 
@@ -712,6 +730,7 @@ struct StepLine<Editor: View>: View {
     /// Opens or closes the step's settings, for steps that have any.
     var onTap: (() -> Void)? = nil
     @ViewBuilder var editor: () -> Editor
+    @State private var hovering = false
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
@@ -730,19 +749,29 @@ struct StepLine<Editor: View>: View {
                 }
             }
             .frame(width: 22, alignment: .trailing)
+            .contentShape(Rectangle())
+            .onTapGesture { onTap?() }
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(summary)
-                    .font(.ui(13, state == .current ? .semibold : .regular))
-                    .foregroundStyle(dimmed || state == .done ? .secondary : .primary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                    .onTapGesture { onTap?() }
-                if let note {
-                    Text(note)
-                        .font(.ui(11))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(summary)
+                        .font(.ui(13, state == .current ? .semibold : .regular))
+                        .foregroundStyle(hovering ? AnyShapeStyle(Brand.cobalt)
+                                         : AnyShapeStyle(dimmed || state == .done ? HierarchicalShapeStyle.secondary : HierarchicalShapeStyle.primary))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if let note {
+                        Text(note)
+                            .font(.ui(11))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { onTap?() }
+                .onHover { inside in
+                    guard onTap != nil else { return }
+                    hovering = inside
+                    if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
                 }
                 editor()
             }
@@ -797,6 +826,51 @@ struct DraftField: View {
     }
 }
 
+/// Shows a key press and changes it to the next keys pressed after a click.
+struct KeyCatcher: View {
+    let label: String
+    let code: UInt16
+    let modifiers: UInt64
+    let onChange: (UInt16, UInt64, String) -> Void
+    @State private var listening = false
+    @State private var monitor: Any?
+
+    var body: some View {
+        Button(listening ? "Press the new keys…" : label) {
+            listening ? stop() : start()
+        }
+        .buttonStyle(.plain)
+        .font(.mono(12, .medium))
+        .foregroundStyle(listening ? AnyShapeStyle(Brand.cobalt) : AnyShapeStyle(HierarchicalShapeStyle.primary))
+        .help("Click, then press the keys this step should press instead. Esc cancels.")
+        .onDisappear { stop() }
+    }
+
+    private func start() {
+        listening = true
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            defer { stop() }
+            if event.keyCode == 53 && event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty { return nil }
+            var flags = CGEventFlags()
+            let m = event.modifierFlags
+            if m.contains(.command) { flags.insert(.maskCommand) }
+            if m.contains(.control) { flags.insert(.maskControl) }
+            if m.contains(.option) { flags.insert(.maskAlternate) }
+            if m.contains(.shift) { flags.insert(.maskShift) }
+            let label = KeyNames.label(code: event.keyCode, flags: flags,
+                                       chars: event.charactersIgnoringModifiers)
+            onChange(event.keyCode, flags.rawValue, label)
+            return nil
+        }
+    }
+
+    private func stop() {
+        listening = false
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+    }
+}
+
 struct StepRow: View {
     @Binding var step: Step
     let number: Int
@@ -834,15 +908,8 @@ struct StepRow: View {
         }
     }
 
-    private var hasSettings: Bool {
-        switch step.kind {
-        case .type(_, _, let secret, _): return !secret
-        case .wait: return true
-        case .click, .key: return step.expect?.summary != nil
-        case .activate: return false
-        case .read: return true
-        }
-    }
+    /// Every step opens, so clicking any of them does something.
+    private var hasSettings: Bool { true }
 
     @ViewBuilder private var editor: some View {
         switch step.kind {
@@ -863,7 +930,45 @@ struct StepRow: View {
                 .font(.ui(11))
                 .foregroundStyle(.tertiary)
                 .padding(.bottom, 2)
+        case .type:
+            Text("A password, asked for each run and never saved.")
+                .font(.ui(11))
+                .foregroundStyle(.secondary)
+                .padding(.top, 4)
+        case .activate(_, let name):
+            Text("Brings \(name) to the front. Right click to skip or delete it.")
+                .font(.ui(11))
+                .foregroundStyle(.secondary)
+                .padding(.top, 4)
         case .click, .key:
+            if case .click = step.kind, step.targetName != nil {
+                HStack(spacing: 8) {
+                    Text("Looks for").font(.ui(12)).foregroundStyle(.secondary)
+                    VStack(spacing: 3) {
+                        DraftField(placeholder: "name", text: targetName)
+                        Divider()
+                    }
+                    .frame(maxWidth: 220)
+                }
+                .padding(.top, 6)
+                Text("Change the name to click a different button or chat, like another person in the list.")
+                    .font(.ui(11))
+                    .foregroundStyle(.tertiary)
+            } else if case .click = step.kind {
+                Text("Clicks a spot found by what's around it. Record it again to change it.")
+                    .font(.ui(11))
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 4)
+            }
+            if case .key(let code, let mods, let label) = step.kind {
+                HStack(spacing: 8) {
+                    Text("Keys").font(.ui(12)).foregroundStyle(.secondary)
+                    KeyCatcher(label: label, code: code, modifiers: mods) { c, m, l in
+                        step.kind = .key(code: c, modifiers: m, label: l)
+                    }
+                }
+                .padding(.top, 6)
+            }
             if let line = step.expect?.summary {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(line)
@@ -920,6 +1025,13 @@ struct StepRow: View {
                     step.kind = .type(text: new, askEachRun: a, secret: s, prompt: p)
                 }
             }
+        )
+    }
+
+    private var targetName: Binding<String> {
+        Binding(
+            get: { step.targetName ?? "" },
+            set: { step = step.renamingTarget(to: $0) }
         )
     }
 
