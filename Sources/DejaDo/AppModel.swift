@@ -90,6 +90,19 @@ final class AppModel: ObservableObject, @unchecked Sendable {
     @Published var webhookToken: String = ""
     /// What the last run read off the screen. Shown, never saved.
     @Published var lastRead: [String: String] = [:]
+
+    /// How the last run ended, for the status line.
+    struct RunResult: Equatable {
+        enum Ending { case completed, failed, stopped }
+        let automationID: UUID
+        let name: String
+        let ending: Ending
+        let steps: Int
+        let rows: Int
+        let seconds: Double?
+        let message: String
+    }
+    @Published var lastResult: RunResult?
     /// The task whose schedule is being edited.
     @Published var scheduleFor: UUID?
     private var scheduleTimer: Timer?
@@ -468,6 +481,7 @@ final class AppModel: ObservableObject, @unchecked Sendable {
         rowCount = max(1, rows.count)
         runningID = automation.id
         runningStep = 0
+        lastResult = nil
         runStarted = Date()
         runNotes = [:]
         let stepIDs = automation.steps.map(\.id)
@@ -595,6 +609,11 @@ final class AppModel: ObservableObject, @unchecked Sendable {
         stopEscapeMonitor()
         runningID = nil
         lastRead = read
+        if let a = automations.first(where: { $0.id == id }) {
+            let ending: RunResult.Ending = failure == nil ? .completed : (failure!.hasPrefix("Stopped.") ? .stopped : .failed)
+            lastResult = RunResult(automationID: id, name: a.name, ending: ending, steps: a.steps.filter(\.isEnabled).count,
+                                   rows: rows, seconds: runStarted.map { Date().timeIntervalSince($0) }, message: failure ?? "")
+        }
         if let failure {
             status = failure
             NSSound.beep()
@@ -617,7 +636,13 @@ final class AppModel: ObservableObject, @unchecked Sendable {
 
     private func applyRepair(id: UUID, stepIndex: Int, locator: ElementLocator, byAI: Bool) {
         update(id) { a in
-            guard stepIndex < a.steps.count, case .click(let old, let b, let c, let m) = a.steps[stepIndex].kind else { return }
+            guard stepIndex < a.steps.count else { return }
+            if case .read(let old, let name) = a.steps[stepIndex].kind {
+                if byAI { beforeRepair[a.steps[stepIndex].id] = old; a.repairs += 1 }
+                a.steps[stepIndex].kind = .read(target: locator, name: name)
+                return
+            }
+            guard case .click(let old, let b, let c, let m) = a.steps[stepIndex].kind else { return }
             if byAI { beforeRepair[a.steps[stepIndex].id] = old }
             a.steps[stepIndex].kind = .click(target: locator, button: b, count: c, modifiers: m)
             if byAI { a.repairs += 1 }

@@ -2,8 +2,9 @@ import SwiftUI
 import AppKit
 @preconcurrency import DejaDoCore
 
-// Built from type, whitespace and hairlines. One accent colour marks what is
-// active; green and red only ever mean a run passed or failed.
+// Built from type, whitespace and hairlines. Cobalt marks what is active or
+// primary; state colours (see Brand) only ever mean a state, and always come
+// with a word.
 
 extension Font {
     /// SF Pro Rounded: softer and friendlier than the default system face.
@@ -43,13 +44,13 @@ struct PrimaryButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.rounded(compact ? 12 : 13, .semibold))
-            .foregroundStyle(.white)
+            .font(.ui(compact ? 12 : 13, .semibold))
+            .foregroundStyle(Brand.onCobalt)
             .padding(.horizontal, compact ? 12 : 16)
             .padding(.vertical, compact ? 5 : 7)
             .background(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(Color.accentColor.opacity(configuration.isPressed ? 0.8 : 1))
+                    .fill(Brand.cobalt.opacity(configuration.isPressed ? 0.8 : 1))
             )
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .opacity(isEnabled ? 1 : 0.45)
@@ -64,7 +65,7 @@ struct QuietButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.rounded(compact ? 12 : 13, .medium))
+            .font(.ui(compact ? 12 : 13, .medium))
             .foregroundStyle(.primary)
             .padding(.horizontal, compact ? 12 : 16)
             .padding(.vertical, compact ? 5 : 7)
@@ -88,7 +89,7 @@ struct ShortcutHint: View {
             Text(label).foregroundStyle(.secondary)
             Text(keys).foregroundStyle(.tertiary)
         }
-        .font(.rounded(11))
+        .font(.ui(11))
     }
 }
 
@@ -122,9 +123,10 @@ struct MainView: View {
                     StatusBar()
                 }
             }
-            .background(Color(nsColor: .textBackgroundColor).opacity(0.35))
+            .background(Brand.canvas)
         }
-        .fontDesign(.rounded)
+        .fontDesign(.default)
+        .tint(Brand.cobalt)
         .ignoresSafeArea(.container, edges: .top)
         .sheet(isPresented: $showSettings) {
             SettingsView().environmentObject(model)
@@ -163,8 +165,14 @@ struct Sidebar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Room for the window controls.
-            Color.clear.frame(height: 40)
+            // Room for the window controls, with the name on the other side.
+            HStack(spacing: 6) {
+                Spacer()
+                BrandMark().frame(height: 11)
+                Text("Deja Do").font(.ui(12, .semibold)).foregroundStyle(Brand.ink)
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 40)
 
             HStack(spacing: 7) {
                 Image(systemName: "magnifyingglass")
@@ -172,7 +180,7 @@ struct Sidebar: View {
                     .foregroundStyle(.tertiary)
                 TextField("Search tasks", text: $query)
                     .textFieldStyle(.plain)
-                    .font(.rounded(13))
+                    .font(.ui(13))
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 10)
@@ -181,11 +189,11 @@ struct Sidebar: View {
 
             HStack {
                 Text("Tasks")
-                    .font(.rounded(11, .semibold))
+                    .font(.ui(11, .semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
                 Text("\(model.automations.count)")
-                    .font(.rounded(11).monospacedDigit())
+                    .font(.ui(11).monospacedDigit())
                     .foregroundStyle(.tertiary)
             }
             .padding(.horizontal, 16)
@@ -199,7 +207,7 @@ struct Sidebar: View {
                     }
                     if filtered.isEmpty {
                         Text(model.automations.isEmpty ? "Recorded tasks show up here." : "No tasks match.")
-                            .font(.rounded(12))
+                            .font(.ui(12))
                             .foregroundStyle(.tertiary)
                             .padding(.horizontal, 16)
                             .padding(.vertical, 6)
@@ -215,9 +223,9 @@ struct Sidebar: View {
                     if model.isRecording { model.stopRecording() } else { model.startRecording() }
                 } label: {
                     HStack(spacing: 8) {
-                        Circle().fill(Color.red).frame(width: 7, height: 7)
+                        Circle().fill(Brand.red).frame(width: 7, height: 7)
                         Text(model.isRecording ? "Stop and save" : "New recording")
-                            .font(.rounded(13, .medium))
+                            .font(.ui(13, .medium))
                     }
                     .contentShape(Rectangle())
                 }
@@ -271,13 +279,13 @@ struct SidebarRow: View {
             HStack(spacing: 10) {
                 RunDot(automation: automation, running: running)
                 Text(automation.name)
-                    .font(.rounded(13, selected ? .semibold : .regular))
+                    .font(.ui(13, selected ? .semibold : .regular))
                     .foregroundStyle(selected ? .primary : .secondary)
                     .lineLimit(1)
                 Spacer(minLength: 6)
                 Text(running ? "running" : Self.ago(automation.lastRun))
-                    .font(.rounded(11).monospacedDigit())
-                    .foregroundStyle(running ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.tertiary))
+                    .font(.ui(11).monospacedDigit())
+                    .foregroundStyle(running ? AnyShapeStyle(Brand.cobalt) : AnyShapeStyle(.tertiary))
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 7)
@@ -325,10 +333,10 @@ struct RunDot: View {
     }
 
     private var color: Color {
-        if running { return .accentColor }
+        if running { return Brand.cobalt }
         switch automation.lastSucceeded {
-        case .some(true): return .green
-        case .some(false): return .red
+        case .some(true): return Brand.forest
+        case .some(false): return Brand.red
         case .none: return .clear
         }
     }
@@ -360,50 +368,110 @@ struct StatusBar: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
-        HStack(spacing: 8) {
-            Circle().fill(dot).frame(width: 6, height: 6)
-            Text(text)
-                .font(.rounded(11))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-            Spacer(minLength: 12)
-            if model.runningID != nil {
-                ShortcutHint(label: "Stop", keys: "Esc")
-            } else if model.isRecording {
-                ShortcutHint(label: "Save", keys: "⌘↩")
-            } else {
-                if model.lastStop != nil && !model.isTeachingPopup {
-                    Button("Something in the way?") { model.teachPopup() }
-                        .buttonStyle(.plain)
-                        .font(.rounded(11, .medium))
-                        .foregroundStyle(Color.accentColor)
-                        .help("Show Deja Do how to close a popup that blocked the run, so it handles it next time")
+        VStack(spacing: 0) {
+            if let p = progress {
+                // How far through the task the run is: a hairline that fills with cobalt.
+                GeometryReader { g in
+                    ZStack(alignment: .leading) {
+                        Rectangle().fill(Brand.mist)
+                        Rectangle().fill(Brand.cobalt).frame(width: g.size.width * p)
+                    }
                 }
-                if let r = model.resume {
-                    Button("Continue from row \(r.from + 1)") { model.continueRows() }
-                        .buttonStyle(.plain)
-                        .font(.rounded(11, .medium))
-                        .foregroundStyle(Color.accentColor)
+                .frame(height: 2)
+                .animation(.easeOut(duration: 0.25), value: p)
+            }
+            HStack(spacing: 7) {
+                Image(systemName: state.symbol)
+                    .font(.ui(11, .semibold))
+                    .foregroundStyle(state.color)
+                Text(state.word)
+                    .font(.ui(11, .semibold))
+                    .foregroundStyle(state.color)
+                if !detail.isEmpty {
+                    Text(detail)
+                        .font(.ui(11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
+                Spacer(minLength: 12)
+                actions
+            }
+            .padding(.horizontal, Metrics.gutter)
+            .frame(height: Metrics.statusHeight)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder private var actions: some View {
+        if model.runningID != nil {
+            ShortcutHint(label: "Stop", keys: "Esc")
+        } else if model.isRecording {
+            ShortcutHint(label: "Read the text under the pointer", keys: "⌃⌥R")
+            ShortcutHint(label: "Save", keys: "⌘↩")
+        } else {
+            if model.lastStop != nil && !model.isTeachingPopup {
+                Button("Something in the way?") { model.teachPopup() }
+                    .buttonStyle(.plain)
+                    .font(.ui(11, .medium))
+                    .foregroundStyle(Brand.cobalt)
+                    .help("Show Deja Do how to close a popup that blocked the run, so it handles it next time")
+            }
+            if let r = model.resume {
+                Button("Continue from row \(r.from + 1)") { model.continueRows() }
+                    .buttonStyle(.plain)
+                    .font(.ui(11, .medium))
+                    .foregroundStyle(Brand.cobalt)
             }
         }
-        .padding(.horizontal, Metrics.gutter)
-        .frame(height: Metrics.statusHeight)
     }
 
-    private var text: String {
-        if model.isRecording { return "Recording · \(model.liveSteps.count) steps so far" }
-        if let s = model.status { return s }
-        if !model.permissionsReady { return "Waiting for permissions" }
-        return "Ready"
+    private var running: Automation? {
+        model.runningID.flatMap { id in model.automations.first { $0.id == id } }
     }
 
-    private var dot: Color {
-        if model.isRecording { return .red }
-        if model.runningID != nil { return .accentColor }
-        if let s = model.status, s != "Done." && !s.hasPrefix("Saved") { return .orange }
-        return .green
+    private var progress: Double? {
+        guard let a = running, !a.steps.isEmpty else { return nil }
+        let perRow = Double(min(model.runningStep + 1, a.steps.count)) / Double(a.steps.count)
+        guard model.rowCount > 1 else { return perRow }
+        return (Double(model.runningRow) + perRow) / Double(model.rowCount)
+    }
+
+    private var state: RunState {
+        if model.isRecording { return .recording }
+        if model.runningID != nil { return .running }
+        if !model.permissionsReady || model.isTeachingPopup || model.pendingRun != nil || model.resume != nil { return .needsAttention }
+        switch model.lastResult?.ending {
+        case .completed: return .completed
+        case .failed: return .failed
+        case .stopped: return .needsAttention
+        case nil: return .ready
+        }
+    }
+
+    private var detail: String {
+        if model.isRecording {
+            let n = model.liveSteps.count
+            return "\(n) step\(n == 1 ? "" : "s") so far"
+        }
+        if let a = running {
+            var parts = [a.name]
+            if model.rowCount > 1 { parts.append("Row \(model.runningRow + 1) of \(model.rowCount)") }
+            parts.append("Step \(min(model.runningStep + 1, a.steps.count)) of \(a.steps.count)")
+            if a.steps.indices.contains(model.runningStep) { parts.append(a.steps[model.runningStep].safeSummary) }
+            return parts.joined(separator: " · ")
+        }
+        if !model.permissionsReady { return "Deja Do needs a couple of permissions first" }
+        if let r = model.lastResult, model.lastResult?.ending == .completed, !(model.status ?? "").hasPrefix("Saved") {
+            var parts = [r.name]
+            parts.append(r.rows > 1 ? "\(r.rows) rows" : "\(r.steps) step\(r.steps == 1 ? "" : "s")")
+            if let t = r.seconds { parts.append(t < 60 ? String(format: "%.1f s", t) : "\(Int(t) / 60) min \(Int(t) % 60) s") }
+            if !model.lastRead.isEmpty, r.rows == 1 {
+                parts.append(model.lastRead.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value.prefix(40))" }.joined(separator: ", "))
+            }
+            return parts.joined(separator: " · ")
+        }
+        return model.status ?? ""
     }
 }
 
@@ -423,7 +491,7 @@ struct AutomationView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     TextField("Name", text: $automation.name)
                         .textFieldStyle(.plain)
-                        .font(.rounded(17, .semibold))
+                        .font(.ui(17, .semibold))
                     meta
                 }
             } actions: {
@@ -469,7 +537,7 @@ struct AutomationView: View {
             HStack(spacing: 6) {
                 TextField("What this task is for (helps AI and agents)", text: goal)
                     .textFieldStyle(.plain)
-                    .font(.rounded(12))
+                    .font(.ui(12))
                     .foregroundStyle(.secondary)
             }
             .padding(.horizontal, Metrics.gutter)
@@ -538,7 +606,7 @@ struct AutomationView: View {
             let when = last.formatted(.relative(presentation: .named))
             let took = automation.lastDuration.map { String(format: " in %.1fs", $0) } ?? ""
             if automation.lastSucceeded == false {
-                parts.append(Text("failed \(when)").foregroundColor(.red))
+                parts.append(Text("failed \(when)").foregroundColor(Brand.red))
             } else {
                 parts.append(Text("last ran \(when)\(took)"))
             }
@@ -550,14 +618,14 @@ struct AutomationView: View {
         }
         if !automation.variableNames.isEmpty {
             parts.append(Text(automation.variableNames.map { "{{\($0)}}" }.joined(separator: " "))
-                .foregroundColor(.accentColor))
+                .foregroundColor(Brand.cobalt))
         }
         if let next = model.nextRun(automation) {
             parts.append(Text("next run \(next.formatted(.relative(presentation: .named)))"))
         }
         let line = parts.dropFirst().reduce(parts[0]) { $0 + Text("  ·  ") + $1 }
         return line
-            .font(.rounded(12))
+            .font(.ui(12))
             .foregroundStyle(.secondary)
             .lineLimit(1)
     }
@@ -636,10 +704,10 @@ struct StepLine<Editor: View>: View {
                 case .done:
                     Image(systemName: "checkmark")
                         .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.green)
+                        .foregroundStyle(Brand.forest)
                 case .idle:
                     Text(number.map(String.init) ?? "")
-                        .font(.rounded(12, .medium).monospacedDigit())
+                        .font(.ui(12, .medium).monospacedDigit())
                         .foregroundStyle(.tertiary)
                 }
             }
@@ -647,14 +715,14 @@ struct StepLine<Editor: View>: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(summary)
-                    .font(.rounded(13, state == .current ? .semibold : .regular))
+                    .font(.ui(13, state == .current ? .semibold : .regular))
                     .foregroundStyle(dimmed || state == .done ? .secondary : .primary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
                     .onTapGesture { onTap?() }
                 if let note {
                     Text(note)
-                        .font(.rounded(11))
+                        .font(.ui(11))
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
@@ -663,7 +731,7 @@ struct StepLine<Editor: View>: View {
 
             if let app {
                 Text(app)
-                    .font(.rounded(12))
+                    .font(.ui(12))
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
             }
@@ -703,16 +771,16 @@ struct StepRow: View {
                  onTap: hasSettings ? toggle : nil) {
             if risk.risk == .risky && step.isEnabled {
                 Text("Sends, saves or deletes, so it runs once and is never retried")
-                    .font(.rounded(11))
+                    .font(.ui(11))
                     .foregroundStyle(.secondary)
                     .help(risk.reason ?? "")
             }
             if let trimReason {
                 HStack(spacing: 10) {
-                    Text("\(trimReason).").font(.rounded(11)).foregroundStyle(.secondary)
-                    Button("Remove", action: onRemove).buttonStyle(.plain).font(.rounded(11, .medium))
-                        .foregroundStyle(Color.accentColor)
-                    Button("Keep", action: onKeep).buttonStyle(.plain).font(.rounded(11, .medium))
+                    Text("\(trimReason).").font(.ui(11)).foregroundStyle(.secondary)
+                    Button("Remove", action: onRemove).buttonStyle(.plain).font(.ui(11, .medium))
+                        .foregroundStyle(Brand.cobalt)
+                    Button("Keep", action: onKeep).buttonStyle(.plain).font(.ui(11, .medium))
                         .foregroundStyle(.secondary)
                 }
             }
@@ -737,29 +805,29 @@ struct StepRow: View {
                 VStack(spacing: 3) {
                     TextField("Text to type", text: typedText)
                         .textFieldStyle(.plain)
-                        .font(.rounded(12))
+                        .font(.ui(12))
                         .disabled(askEachRun.wrappedValue)
                     Divider()
                 }
                 .frame(maxWidth: 300)
                 Toggle("Ask each run", isOn: askEachRun)
                     .toggleStyle(.checkbox)
-                    .font(.rounded(11))
+                    .font(.ui(11))
             }
             .padding(.top, 6)
             Text("Type {{name}} anywhere to fill it in each run, or from a spreadsheet column.")
-                .font(.rounded(11))
+                .font(.ui(11))
                 .foregroundStyle(.tertiary)
                 .padding(.bottom, 2)
         case .click, .key:
             if let line = step.expect?.summary {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(line)
-                        .font(.rounded(12))
+                        .font(.ui(12))
                         .foregroundStyle(.secondary)
                     HStack(spacing: 6) {
                         Text("If it doesn't match")
-                            .font(.rounded(12))
+                            .font(.ui(12))
                             .foregroundStyle(.secondary)
                         Picker("If it doesn't match", selection: mismatch) {
                             ForEach(MismatchPolicy.allCases, id: \.self) { Text($0.label).tag($0) }
@@ -775,24 +843,24 @@ struct StepRow: View {
             }
         case .read:
             HStack(spacing: 8) {
-                Text("Keep it as").font(.rounded(12)).foregroundStyle(.secondary)
+                Text("Keep it as").font(.ui(12)).foregroundStyle(.secondary)
                 VStack(spacing: 3) {
                     TextField("name", text: readName)
                         .textFieldStyle(.plain)
-                        .font(.rounded(12))
+                        .font(.ui(12))
                     Divider()
                 }
                 .frame(maxWidth: 180)
             }
             .padding(.top, 6)
             Text("Later steps can type {{\(readName.wrappedValue)}}, and tools that start this task get it back.")
-                .font(.rounded(11))
+                .font(.ui(11))
                 .foregroundStyle(.tertiary)
                 .padding(.bottom, 2)
         case .wait:
             Stepper(value: waitSeconds, in: 0.5...60, step: 0.5) {
                 Text("\(waitSeconds.wrappedValue, specifier: "%g") seconds")
-                    .font(.rounded(11))
+                    .font(.ui(11))
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: 200, alignment: .leading)
@@ -862,11 +930,11 @@ struct RecordingView: View {
             HeaderBar {
                 HStack(spacing: 9) {
                     Circle()
-                        .fill(Color.red)
+                        .fill(Brand.red)
                         .frame(width: 8, height: 8)
                         .opacity(pulse ? 0.25 : 1)
                         .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulse)
-                    Text("Recording").font(.rounded(17, .semibold))
+                    Text("Recording").font(.ui(17, .semibold))
                 }
                 .onAppear { pulse = true }
             } actions: {
@@ -880,7 +948,7 @@ struct RecordingView: View {
             }
 
             Text("Do the task the way you normally would. Every click, keystroke and app switch becomes a step. Passwords are never recorded. To keep a value from the screen, like a total or an order number, point at it and press ⌃⌥R.")
-                .font(.rounded(13))
+                .font(.ui(13))
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: 560, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
@@ -900,7 +968,7 @@ struct RecordingView: View {
                     }
                     if model.liveSteps.isEmpty && model.pendingText.isEmpty {
                         Text("Waiting for your first click…")
-                            .font(.rounded(13))
+                            .font(.ui(13))
                             .foregroundStyle(.tertiary)
                             .padding(.vertical, 14)
                     }
@@ -919,15 +987,17 @@ struct EmptyStateView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HeaderBar {
-                Text("Welcome").font(.rounded(17, .semibold))
+                Text("Welcome").font(.ui(17, .semibold))
             } actions: {
                 EmptyView()
             }
             VStack(alignment: .leading, spacing: 12) {
+                BrandMark().frame(height: 34).padding(.bottom, 10)
                 Text("Do it once.")
-                    .font(.rounded(28, .semibold))
+                    .font(.ui(28, .semibold))
+                    .foregroundStyle(Brand.ink)
                 Text("Record a boring task, like downloading a report, renaming it and emailing it. Deja Do saves every step and does the whole thing for you from then on. If a button moves or gets renamed, it finds it again.")
-                    .font(.rounded(14))
+                    .font(.ui(14))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: 480, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
@@ -948,15 +1018,15 @@ struct PermissionsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HeaderBar {
-                Text("Set up").font(.rounded(17, .semibold))
+                Text("Set up").font(.ui(17, .semibold))
             } actions: {
                 EmptyView()
             }
             VStack(alignment: .leading, spacing: 0) {
                 Text("Two permissions first")
-                    .font(.rounded(22, .semibold))
+                    .font(.ui(22, .semibold))
                 Text("macOS has to let Deja Do press buttons in other apps, and notice your clicks and keys while you record. Nothing leaves your Mac.")
-                    .font(.rounded(13))
+                    .font(.ui(13))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: 520, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
@@ -976,7 +1046,7 @@ struct PermissionsView: View {
                 Divider()
 
                 Text("Switch both on in System Settings, then quit and reopen Deja Do. This page updates by itself.")
-                    .font(.rounded(12))
+                    .font(.ui(12))
                     .foregroundStyle(.tertiary)
                     .padding(.top, 16)
             }
@@ -989,15 +1059,15 @@ struct PermissionsView: View {
         HStack(alignment: .center, spacing: 14) {
             Image(systemName: granted ? "checkmark" : "circle")
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(granted ? AnyShapeStyle(Color.green) : AnyShapeStyle(.tertiary))
+                .foregroundStyle(granted ? AnyShapeStyle(Brand.forest) : AnyShapeStyle(.tertiary))
                 .frame(width: 16)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.rounded(13, .medium))
-                Text(detail).font(.rounded(12)).foregroundStyle(.secondary)
+                Text(title).font(.ui(13, .medium))
+                Text(detail).font(.ui(12)).foregroundStyle(.secondary)
             }
             Spacer()
             if granted {
-                Text("On").font(.rounded(12)).foregroundStyle(.secondary)
+                Text("On").font(.ui(12)).foregroundStyle(.secondary)
             } else {
                 Button("Open Settings", action: action)
                     .buttonStyle(QuietButtonStyle(compact: true))
@@ -1023,9 +1093,9 @@ struct VariablesSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Run “\(name)”")
-                .font(.rounded(17, .semibold))
+                .font(.ui(17, .semibold))
             Text("Fill these in for this run.")
-                .font(.rounded(12))
+                .font(.ui(12))
                 .foregroundStyle(.secondary)
                 .padding(.top, 4)
                 .padding(.bottom, 16)
@@ -1033,10 +1103,10 @@ struct VariablesSheet: View {
             Divider()
             ForEach(pending.names, id: \.self) { key in
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(key).font(.rounded(12, .medium)).foregroundStyle(.secondary)
+                    Text(key).font(.ui(12, .medium)).foregroundStyle(.secondary)
                     TextField("", text: binding(key))
                         .textFieldStyle(.plain)
-                        .font(.rounded(13))
+                        .font(.ui(13))
                 }
                 .padding(.vertical, 12)
                 Divider()
@@ -1051,8 +1121,8 @@ struct VariablesSheet: View {
                     }
                 }
                 .buttonStyle(.plain)
-                .font(.rounded(12))
-                .foregroundStyle(Color.accentColor)
+                .font(.ui(12))
+                .foregroundStyle(Brand.cobalt)
                 Spacer()
                 Button("Cancel") { model.pendingRun = nil }
                     .buttonStyle(QuietButtonStyle(compact: true))
@@ -1069,7 +1139,7 @@ struct VariablesSheet: View {
         }
         .padding(26)
         .frame(width: 440)
-        .fontDesign(.rounded)
+        .fontDesign(.default)
         .onAppear { values = model.lastValues[pending.automationID] ?? [:] }
     }
 
@@ -1087,13 +1157,13 @@ struct SettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Settings")
-                .font(.rounded(17, .semibold))
+                .font(.ui(17, .semibold))
                 .padding(.bottom, 16)
 
             Divider()
 
             Toggle("Ask AI when a button can't be found with confidence", isOn: $model.aiEnabled)
-                .font(.rounded(13))
+                .font(.ui(13))
                 .padding(.vertical, 14)
 
             Divider()
@@ -1123,7 +1193,7 @@ struct SettingsView: View {
             if model.webhooksEnabled {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(model.webhookStatus)
-                        .font(.rounded(11))
+                        .font(.ui(11))
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                     HStack(spacing: 10) {
@@ -1145,7 +1215,7 @@ struct SettingsView: View {
             if model.useVision && !model.hasScreenRecording {
                 HStack {
                     Text("Needs Screen Recording permission.")
-                        .font(.rounded(11))
+                        .font(.ui(11))
                         .foregroundStyle(.secondary)
                     Spacer()
                     Button("Open Settings") {
@@ -1170,9 +1240,9 @@ struct SettingsView: View {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Repair records")
-                        .font(.rounded(13))
+                        .font(.ui(13))
                     Text(model.corpus.summary() + " How controls were described when a step had to be healed, picked by AI, found from the screen or wasn't found. No typed text. Stays on this Mac unless you save it somewhere.")
-                        .font(.rounded(11))
+                        .font(.ui(11))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -1187,7 +1257,7 @@ struct SettingsView: View {
 
             HStack {
                 Text("Esc stops a running task.")
-                    .font(.rounded(12))
+                    .font(.ui(12))
                     .foregroundStyle(.tertiary)
                 Spacer()
                 Button("Done") { dismiss() }
@@ -1198,7 +1268,7 @@ struct SettingsView: View {
         }
         .padding(26)
         .frame(width: 480)
-        .fontDesign(.rounded)
+        .fontDesign(.default)
         .onAppear { if model.aiProvider == .ollama { model.refreshOllamaModels() } }
     }
 
@@ -1303,13 +1373,13 @@ struct SettingsView: View {
     private func row<C: View>(_ title: String, note: String?, @ViewBuilder control: () -> C) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 12) {
-                Text(title).font(.rounded(13))
+                Text(title).font(.ui(13))
                 Spacer(minLength: 12)
-                control().font(.rounded(13))
+                control().font(.ui(13))
             }
             if let note {
                 Text(note)
-                    .font(.rounded(11))
+                    .font(.ui(11))
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1320,9 +1390,9 @@ struct SettingsView: View {
     private func toggle(_ title: String, isOn: Binding<Bool>, note: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Toggle(title, isOn: isOn)
-                .font(.rounded(13))
+                .font(.ui(13))
             Text(note)
-                .font(.rounded(11))
+                .font(.ui(11))
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -1350,17 +1420,17 @@ struct SuggestionLine: View {
     var body: some View {
         HStack(spacing: 12) {
             Text(text)
-                .font(.rounded(12))
+                .font(.ui(12))
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
             Spacer(minLength: 8)
             if let accept {
-                Button(accept, action: accepted).buttonStyle(.plain).font(.rounded(12, .medium))
-                    .foregroundStyle(Color.accentColor)
-                Button("Not now", action: dismiss).buttonStyle(.plain).font(.rounded(12))
+                Button(accept, action: accepted).buttonStyle(.plain).font(.ui(12, .medium))
+                    .foregroundStyle(Brand.cobalt)
+                Button("Not now", action: dismiss).buttonStyle(.plain).font(.ui(12))
                     .foregroundStyle(.secondary)
             } else {
-                Button("Remove", action: dismiss).buttonStyle(.plain).font(.rounded(12))
+                Button("Remove", action: dismiss).buttonStyle(.plain).font(.ui(12))
                     .foregroundStyle(.secondary)
             }
         }
@@ -1380,7 +1450,7 @@ struct HistoryView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Run history").font(.rounded(17, .semibold))
+                Text("Run history").font(.ui(17, .semibold))
                 Spacer()
                 Button("Done") { dismiss() }
                     .buttonStyle(PrimaryButtonStyle(compact: true))
@@ -1390,7 +1460,7 @@ struct HistoryView: View {
             Divider()
             if records.isEmpty {
                 Text("No runs yet.")
-                    .font(.rounded(13))
+                    .font(.ui(13))
                     .foregroundStyle(.tertiary)
                     .padding(.vertical, 18)
             }
@@ -1399,27 +1469,27 @@ struct HistoryView: View {
                     ForEach(records) { r in
                         VStack(alignment: .leading, spacing: 4) {
                             HStack(spacing: 10) {
-                                Circle().fill(r.succeeded ? Color.green : Color.red).frame(width: 6, height: 6)
-                                Text(r.started.formatted(date: .abbreviated, time: .shortened)).font(.rounded(13))
+                                Circle().fill(r.succeeded ? Brand.forest : Brand.red).frame(width: 6, height: 6)
+                                Text(r.started.formatted(date: .abbreviated, time: .shortened)).font(.ui(13))
                                 if let row = r.row, let rows = r.rows {
-                                    Text("row \(row) of \(rows)").font(.rounded(12)).foregroundStyle(.secondary)
+                                    Text("row \(row) of \(rows)").font(.ui(12)).foregroundStyle(.secondary)
                                 }
                                 Spacer()
-                                Text(String(format: "%.1fs", r.duration)).font(.rounded(12).monospacedDigit())
+                                Text(String(format: "%.1fs", r.duration)).font(.ui(12).monospacedDigit())
                                     .foregroundStyle(.secondary)
                             }
-                            Text(r.outcome).font(.rounded(12)).foregroundStyle(.secondary)
+                            Text(r.outcome).font(.ui(12)).foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                             if open == r.id {
                                 ForEach(r.steps, id: \.index) { st in
                                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                        Text("\(st.index + 1)").font(.rounded(11).monospacedDigit())
+                                        Text("\(st.index + 1)").font(.ui(11).monospacedDigit())
                                             .foregroundStyle(.tertiary).frame(width: 20, alignment: .trailing)
                                         VStack(alignment: .leading, spacing: 2) {
-                                            Text(st.summary).font(.rounded(12))
+                                            Text(st.summary).font(.ui(12))
                                                 .foregroundStyle(st.ran ? .primary : .tertiary)
                                             if let n = st.note {
-                                                Text(n).font(.rounded(11)).foregroundStyle(.secondary)
+                                                Text(n).font(.ui(11)).foregroundStyle(.secondary)
                                             }
                                         }
                                     }
@@ -1438,7 +1508,7 @@ struct HistoryView: View {
         }
         .padding(26)
         .frame(width: 560, height: 520)
-        .fontDesign(.rounded)
+        .fontDesign(.default)
         .onAppear { records = model.history.load(automationID) }
     }
 }
@@ -1464,12 +1534,12 @@ struct ScheduleView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Run “\(automation.name)” on a schedule")
-                .font(.rounded(17, .semibold))
+                .font(.ui(17, .semibold))
                 .padding(.bottom, 16)
             Divider()
 
             Toggle("Run by itself", isOn: $schedule.on)
-                .font(.rounded(13))
+                .font(.ui(13))
                 .padding(.vertical, 14)
             Divider()
 
@@ -1491,13 +1561,13 @@ struct ScheduleView: View {
                 Divider()
                 row("Every") {
                     Stepper("\(schedule.everyHours) hour\(schedule.everyHours == 1 ? "" : "s")", value: $schedule.everyHours, in: 1...12)
-                        .font(.rounded(13))
+                        .font(.ui(13))
                         .fixedSize()
                 }
                 Divider()
                 row("Until") {
                     Stepper("\(schedule.untilHour):00", value: $schedule.untilHour, in: 0...23)
-                        .font(.rounded(13))
+                        .font(.ui(13))
                         .fixedSize()
                 }
             }
@@ -1505,7 +1575,7 @@ struct ScheduleView: View {
             if !automation.variableNames.isEmpty {
                 Divider()
                 Text("Nobody will be there to fill these in, so they're kept with the schedule.")
-                    .font(.rounded(11))
+                    .font(.ui(11))
                     .foregroundStyle(.tertiary)
                     .padding(.top, 14)
                 ForEach(automation.variableNames, id: \.self) { name in
@@ -1516,7 +1586,7 @@ struct ScheduleView: View {
                                 set: { schedule.values[name] = $0 }))
                                 .textFieldStyle(.plain)
                                 .multilineTextAlignment(.trailing)
-                                .font(.rounded(13))
+                                .font(.ui(13))
                             Divider()
                         }
                         .frame(width: 200)
@@ -1527,7 +1597,7 @@ struct ScheduleView: View {
             Divider()
             VStack(alignment: .leading, spacing: 4) {
                 if let problem, schedule.on {
-                    Text(problem).foregroundStyle(.orange)
+                    Text(problem).foregroundStyle(Brand.amber)
                 } else if schedule.on, let next = preview.next(after: Date(), calendar: .current) {
                     Text("Next run \(next.formatted(date: .abbreviated, time: .shortened)).")
                 }
@@ -1535,7 +1605,7 @@ struct ScheduleView: View {
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .font(.rounded(11))
+            .font(.ui(11))
             .padding(.vertical, 14)
 
             HStack {
@@ -1560,7 +1630,7 @@ struct ScheduleView: View {
         }
         .padding(26)
         .frame(width: 460)
-        .fontDesign(.rounded)
+        .fontDesign(.default)
     }
 
     private var preview: Schedule {
@@ -1574,7 +1644,7 @@ struct ScheduleView: View {
 
     @ViewBuilder private func row<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         HStack {
-            Text(title).font(.rounded(13))
+            Text(title).font(.ui(13))
             Spacer()
             content()
         }

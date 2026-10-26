@@ -74,6 +74,8 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/DejaDo"
 cp Support/Info.plist "$APP/Contents/Info.plist"
+# The app icon and the menu bar mark.
+cp Support/Resources/* "$APP/Contents/Resources/" 2>/dev/null || true
 
 # Sparkle, for updates. SwiftPM puts the framework next to the binary.
 FW_SRC="$(dirname "$BIN")/Sparkle.framework"

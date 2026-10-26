@@ -51,7 +51,7 @@ struct MenuBarLabel: View {
     private static var openedAtLaunch = false
 
     var body: some View {
-        Image(systemName: icon)
+        icon
             .task {
                 guard !Self.openedAtLaunch else { return }
                 Self.openedAtLaunch = true
@@ -64,11 +64,24 @@ struct MenuBarLabel: View {
             }
     }
 
-    private var icon: String {
-        if model.isRecording { return "record.circle" }
-        if model.runningID != nil { return "play.circle" }
-        return "repeat"
+    /// The mark when idle; the state's own symbol while recording or running.
+    @ViewBuilder private var icon: some View {
+        if model.isRecording {
+            Image(systemName: "record.circle")
+        } else if model.runningID != nil {
+            Image(systemName: "play.circle")
+        } else if let mark = Self.mark {
+            Image(nsImage: mark)
+        } else {
+            Image(systemName: "repeat")
+        }
     }
+
+    private static let mark: NSImage? = {
+        guard let image = NSImage(named: "MenuBarIcon") else { return nil }
+        image.isTemplate = true
+        return image
+    }()
 }
 
 struct MenuContent: View {
@@ -85,7 +98,7 @@ struct MenuContent: View {
             .keyboardShortcut("s")
             Button("Discard Recording") { model.discardRecording() }
         } else if model.runningID != nil {
-            Text("Running step \(model.runningStep + 1) · press Esc to stop")
+            Text("Running · step \(model.runningStep + 1) · press Esc to stop")
             Button("Stop") { model.stopRun() }
         } else {
             Button("Record a Task") {
