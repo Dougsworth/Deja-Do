@@ -15,11 +15,11 @@ You need Xcode or the Xcode command line tools (`xcode-select --install`).
 ./build.sh release    # sign with Developer ID, notarize, and zip it to send to people
 ```
 
-The self test drives real apps with real mouse and keyboard events. Keep hands off for about seven minutes. `SUITE=calculator`, `SUITE=web` or `SUITE=apps` runs one part.
+The self test drives real apps with real mouse and keyboard events. Keep hands off for about fifteen minutes. `SUITE=calculator`, `SUITE=web`, `SUITE=chrome` or `SUITE=apps` runs one part. Parts whose app isn't installed, isn't signed in, or would mean touching the person's own documents are reported as skipped rather than failed.
 
-- **Calculator.** Records 7 + 8 =, replays it as recorded, in the Scientific layout, after the window moves, and from the screen alone. Checks that a step whose screen doesn't match stops without repeating, that another app jumping in front is handled, that Esc stops a long wait at once, and that the task can be started over the local web address (no token refused, a run waited on, a second request told it's busy).
-- **Web form.** Deja Do serves itself a small form and opens it in Safari. The page can break itself the ways real sites do, and it counts every real submission, so "sent exactly once" is proven rather than assumed. One recording is replayed against fourteen versions: unchanged, button renamed, button relabelled to a different word, fields reordered and button moved, form loading late, result showing slowly, form below the fold, DOM ids random on each load, a lookalike button beside the real one, a cookie banner over the form (before and after Deja Do is shown how to close it), a new confirm dialog, all of the above at once, and the same form on a different website. Each must submit exactly once with the right values or stop with nothing sent. Submitting twice fails the whole run.
-- **Desktop apps.** Records typing and ⌘S in TextEdit, replays it into a new document (the text must land once), and checks a ⌘S whose result doesn't match stops without being pressed again. Also checks that a running Electron app describes its buttons once asked.
+- **Calculator.** Records 7 + 8 =, replays it as recorded, in the Scientific layout, after the window moves, from the screen alone, and on a second display when one is connected. Checks that a step whose screen doesn't match stops without repeating, that another app jumping in front is handled, that Esc stops a long wait at once, and that the task can be started over the local web address. Then reopens Calculator in Spanish and records and replays it there.
+- **Web form, in Safari and in Chrome.** Deja Do serves itself a small form. The page can break itself the ways real sites do, and it counts every real submission, so "sent exactly once" is proven rather than assumed. One recording is replayed against fourteen versions: unchanged, button renamed, button relabelled to a different word, fields reordered and button moved, form loading late, result showing slowly, form below the fold, DOM ids random on each load, a lookalike button beside the real one, a cookie banner over the form (before and after Deja Do is shown how to close it), a new confirm dialog, all of the above at once, and the same form on a different website. Each must submit exactly once with the right values or stop with nothing sent. Submitting twice fails the whole run. The form is also recorded and replayed in Spanish, where "Enviar" must be recognised as a risky step.
+- **Desktop apps.** TextEdit: typing and ⌘S, replayed into a new document (the text must land once), and a ⌘S whose result doesn't match stops without being pressed again; repeated in Spanish when none of the person's own TextEdit documents are open. Excel: 1234, Tab, 4321, Tab, =A1+B1, Return in a new workbook, replayed into another, checked by reading 5555 off the screen; only the test's workbooks are closed, without saving. Slack: moving between sidebar tabs, replayed, and replayed again after the window is narrowed; nothing is typed or sent. A running Electron app must describe its buttons once asked.
 
 `./build.sh watch` waits for a `.selftest-request` file in the folder (its contents can name a suite) and runs the self test each time one appears, so changes can be tested without anyone at the keyboard.
 
@@ -99,12 +99,15 @@ Deja Do assumes a run can go wrong and is built to stop cleanly rather than gues
 - **Repairs can't drift.** Self healing and AI fixes are held to what the step was first recorded as, so many small repairs can't walk a step onto a different button. AI fixes can be undone from the step's menu.
 - **Clear endings.** Each run ends saying whether anything was sent or saved before it stopped. Spreadsheet runs offer to continue from the right row, skipping a row that may already have gone through.
 - **Partial scans aren't trusted.** Reading a window has a time limit and a node limit; a match from a scan that was cut short isn't treated as certain.
+- **Risky in other languages too.** Send, save, delete, pay and submit words in Spanish, French, German, Portuguese, Italian and Dutch mark a step as risky, alongside English and the keyboard shortcuts.
 - **Same website only.** A step recorded on a web page remembers the site. If the browser is on a different site, the run stops rather than click a page that only looks the same.
 - **Saved tasks never vanish quietly.** Damaged or newer-format task files are reported and left untouched, imported files are checked first, and deleting moves a task to the Trash.
 
 ## Web pages
 
-Safari, Chrome, Edge, Brave, Arc and Electron apps are read through the same Accessibility interface as native apps, once Deja Do asks them to switch it on. Each control's DOM id is used like an app's own identifier, so a button that is renamed or relabelled is still found. Ids that web frameworks make up at load time (`mui-12`, `:r3:`, `field-482`) are recognised and ignored. Popups that come and go on their own, like a browser's autofill list, are never taken as a step's result.
+Safari, Chrome, Edge, Brave, Arc and Electron apps are read through the same Accessibility interface as native apps, once Deja Do asks them to switch it on. Each control's DOM id is used like an app's own identifier, so a button that is renamed or relabelled is still found. Ids that web frameworks make up at load time (`mui-12`, `:r3:`, `field-482`) are recognised and ignored. Popups that come and go on their own, like a browser's autofill list, and labels that only describe edit history, like Excel's "Can't Repeat", are never taken as a step's result.
+
+Several displays work: a window's picture is taken from every display it's on and joined, so one sitting across two displays is seen whole.
 
 ## Starting tasks from other tools
 
@@ -173,7 +176,7 @@ Keys are kept in the keychain. Only a text list of the window's elements is sent
 | `Sources/DejaDoCore/Risk.swift`, `Safety.swift` | Risky steps, typing checks, repair guard, how a run ended |
 | `Sources/DejaDoCore/Corpus.swift` | Repair records |
 | `Sources/DejaDoCore/Webhooks.swift`, `Sources/DejaDo/WebhookServer.swift` | The local web address other tools start tasks through |
-| `Sources/DejaDo/SelfTest.swift`, `WebSelfTest.swift`, `AppsSelfTest.swift` | End to end tests on Calculator, Safari and TextEdit |
+| `Sources/DejaDo/SelfTest.swift`, `WebSelfTest.swift`, `AppsSelfTest.swift`, `SlackSelfTest.swift`, `ExcelSelfTest.swift` | End to end tests on Calculator, Safari, Chrome, TextEdit, Excel and Slack |
 | `Sources/DejaDo/TestServer.swift` | The breakable web form the web test uses |
 | `Sources/DejaDoCore/Settle.swift` | Knowing when a window has finished changing |
 | `Sources/DejaDoCore/Model.swift` | Steps, automations, saving |
@@ -185,7 +188,7 @@ Keys are kept in the keychain. Only a text list of the window's elements is sent
 | `Sources/DejaDo/AIRepair.swift` | The question sent to the AI |
 | `server/` | The Deja Do AI server for Dokploy |
 | `Sources/DejaDo/ScreenVision.swift` | ScreenCaptureKit capture, Vision text reading, before and after reads |
-| `Tests/DejaDoCoreTests` | 161 engine, vision, step checking and safety tests. They also run on Linux |
+| `Tests/DejaDoCoreTests` | 169 engine, vision, step checking and safety tests. They also run on Linux |
 
 Automations are saved as JSON in `~/Library/Application Support/Deja Do/Automations`. Anything recorded while the app was called Once is copied over on first launch.
 
