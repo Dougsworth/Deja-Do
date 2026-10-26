@@ -146,16 +146,32 @@ final class Recorder: @unchecked Sendable {
         switch type {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
-        case .leftMouseDown:
-            handleClick(event, button: .left)
-        case .rightMouseDown:
-            handleClick(event, button: .right)
-        case .keyDown:
-            handleKey(event)
+        // The tap's callback must return quickly: when it runs long, macOS
+        // switches the tap off and the clicks made meanwhile are lost for good.
+        // Reading what was clicked asks the target app over Accessibility, which
+        // a freshly launched or busy app can be slow to answer. So the callback
+        // only notes the event and when it happened; the work runs right after,
+        // in the same order, on the main thread.
+        case .leftMouseDown, .rightMouseDown, .keyDown:
+            guard let copy = event.copy() else { return }
+            let at = Date()
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.isRecording else { return }
+                self.eventTime = at
+                defer { self.eventTime = nil }
+                switch type {
+                case .leftMouseDown: self.handleClick(copy, button: .left)
+                case .rightMouseDown: self.handleClick(copy, button: .right)
+                default: self.handleKey(copy)
+                }
+            }
         default:
             break
         }
     }
+
+    /// When the event being handled actually happened, which may be a moment before it's handled.
+    private var eventTime: Date?
 
     private func handleClick(_ event: CGEvent, button: MouseButtonKind) {
         let point = event.location
@@ -306,7 +322,10 @@ final class Recorder: @unchecked Sendable {
 
     /// The newest finished read that started after the last action, if any.
     private func latestReadSinceLastAction() -> Int? {
-        reads.filter { $0.value.started > lastActionAt }.max { $0.value.finished < $1.value.finished }?.key
+        // Only reads that began before this action happened show the screen before it.
+        let cutoff = eventTime ?? .distantFuture
+        return reads.filter { $0.value.started > lastActionAt && $0.value.started < cutoff }
+            .max { $0.value.finished < $1.value.finished }?.key
     }
 
     /// Marks an action: returns the read showing the screen just before it,
@@ -314,7 +333,7 @@ final class Recorder: @unchecked Sendable {
     private func snapshot() -> Int? {
         guard checkSteps || visionEnabled else { return nil }
         let before = latestReadSinceLastAction()
-        lastActionAt = Date()
+        lastActionAt = eventTime ?? Date()
         let gen = generation
         Task.detached(priority: .utility) { [weak self] in
             try? await Task.sleep(nanoseconds: 250_000_000)
