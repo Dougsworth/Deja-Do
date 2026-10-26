@@ -31,8 +31,13 @@ enum Input {
         }
     }
 
-    static func type(_ text: String) {
+    /// Types text one character at a time. `shouldContinue` is asked before each
+    /// character, so typing stops the moment the target app loses focus instead
+    /// of spilling into whatever came to the front. Returns false if it stopped early.
+    @discardableResult
+    static func type(_ text: String, shouldContinue: () -> Bool = { true }) -> Bool {
         for ch in text {
+            if !shouldContinue() { return false }
             if ch == "\n" || ch == "\r" { key(36, modifiers: 0); continue }
             if ch == "\t" { key(48, modifiers: 0); continue }
             var units = Array(String(ch).utf16)
@@ -46,6 +51,16 @@ enum Input {
             up.post(tap: .cghidEventTap)
             usleep(12_000)
         }
+        return true
+    }
+
+    /// Scrolls by whole lines with the pointer over `point`. Negative scrolls down.
+    static func scroll(at point: CGPoint, lines: Int32) {
+        CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)?
+            .post(tap: .cghidEventTap)
+        usleep(40_000)
+        CGEvent(scrollWheelEvent2Source: source, units: .line, wheelCount: 1, wheel1: lines, wheel2: 0, wheel3: 0)?
+            .post(tap: .cghidEventTap)
     }
 
     static func key(_ code: UInt16, modifiers: UInt64) {

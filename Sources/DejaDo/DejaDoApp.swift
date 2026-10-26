@@ -1,12 +1,21 @@
 import SwiftUI
 import AppKit
-import DejaDoCore
+@preconcurrency import DejaDoCore
 
 /// Opens .dejado files double-clicked in Finder or dropped on the app.
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        if SelfTest.requested { SelfTest.start() }
+    }
+
     func application(_ application: NSApplication, open urls: [URL]) {
-        AppModel.shared.importFiles(urls)
-        NSApp.activate(ignoringOtherApps: true)
+        // dejado://run?task=… links come from agents and other apps; files are tasks to import.
+        for url in urls where url.scheme == "dejado" { AppModel.shared.handle(url: url) }
+        let files = urls.filter { $0.isFileURL }
+        if !files.isEmpty {
+            AppModel.shared.importFiles(files)
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
 }
 

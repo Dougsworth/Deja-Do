@@ -112,20 +112,36 @@ enum AX {
         AXUIElementPerformAction(el, action as CFString) == .success
     }
 
-    static func element(at point: CGPoint) -> AXUIElement? {
+    static func element(at point: CGPoint, timeout: Float = 1.0) -> AXUIElement? {
         let system = AXUIElementCreateSystemWide()
-        AXUIElementSetMessagingTimeout(system, 1.0)
+        AXUIElementSetMessagingTimeout(system, timeout)
         var el: AXUIElement?
         guard AXUIElementCopyElementAtPosition(system, Float(point.x), Float(point.y), &el) == .success else { return nil }
         return el
     }
 
     /// Chrome and Electron apps only build their accessibility tree when asked.
+    /// Chromium listens for either attribute depending on its version, so
+    /// anything built on it gets both. Other apps get only the harmless one:
+    /// AXEnhancedUserInterface makes some native apps animate window moves oddly.
     static func wake(app el: AXUIElement, bundleID: String) {
         AXUIElementSetAttributeValue(el, "AXManualAccessibility" as CFString, kCFBooleanTrue)
-        if chromiumBrowsers.contains(bundleID) {
+        if chromiumBrowsers.contains(bundleID) || isElectron(bundleID) {
             AXUIElementSetAttributeValue(el, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
         }
+    }
+
+    private static var electronCache: [String: Bool] = [:]
+    private static let electronLock = NSLock()
+
+    /// Whether the app is built on Electron (it ships the framework inside its bundle).
+    static func isElectron(_ bundleID: String) -> Bool {
+        electronLock.lock(); defer { electronLock.unlock() }
+        if let known = electronCache[bundleID] { return known }
+        let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+        let has = url.map { FileManager.default.fileExists(atPath: $0.appendingPathComponent("Contents/Frameworks/Electron Framework.framework").path) } ?? false
+        electronCache[bundleID] = has
+        return has
     }
 
     static func wake(pid: pid_t, bundleID: String) {
@@ -138,9 +154,20 @@ enum AX {
     static func isOwn(at point: CGPoint) -> Bool {
         let me = ProcessInfo.processInfo.processIdentifier
         if let hit = element(at: point) { return pid(hit) == me }
+        // NSScreen.screens.first is the display with the menu bar, which both spaces are measured from.
         let height = NSScreen.screens.first?.frame.height ?? 0
-        let flipped = NSPoint(x: point.x, y: height - point.y)
+        let flipped = ScreenGeometry.flip(point, mainDisplayHeight: height)
         return NSApp.windows.contains { $0.isVisible && $0.frame.contains(flipped) }
+    }
+
+    /// Frame of the window under a screen point, or else of the front app's focused window.
+    static func windowFrame(at point: CGPoint) -> CGRect? {
+        if let hit = element(at: point), let w = element(hit, kAXWindowAttribute), let f = frame(w) { return f }
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return nil }
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(appElement, 0.5)
+        return element(appElement, kAXFocusedWindowAttribute).flatMap { frame($0) }
     }
 
     /// Role used for clicks recorded only by where they landed in the window.
@@ -170,10 +197,14 @@ enum AX {
 
     // MARK: Nodes
 
+    /// Browsers hand out a page element's DOM id here (Safari and Chromium both do).
+    static let domIdentifierAttribute = "AXDOMIdentifier"
+    static let urlAttribute = "AXURL"
+
     static let nodeAttrs: [String] = [
         kAXRoleAttribute, kAXSubroleAttribute, kAXTitleAttribute, kAXDescriptionAttribute,
         kAXIdentifierAttribute, kAXHelpAttribute, kAXValueAttribute, kAXPositionAttribute,
-        kAXSizeAttribute, kAXChildrenAttribute
+        kAXSizeAttribute, kAXChildrenAttribute, domIdentifierAttribute
     ]
 
     static func node(_ el: AXUIElement) -> AXNode { node(el, attrs: fetch(el, nodeAttrs)) }
@@ -189,7 +220,8 @@ enum AX {
             subrole: string(a[kAXSubroleAttribute]),
             title: title,
             desc: desc,
-            identifier: string(a[kAXIdentifierAttribute]),
+            // A web page's own id for the element is as good as an app's identifier.
+            identifier: string(a[kAXIdentifierAttribute]) ?? string(a[domIdentifierAttribute]),
             help: string(a[kAXHelpAttribute]),
             value: value,
             label: title ?? desc ?? value ?? fallbackLabel(el, role: r, children: elements(a[kAXChildrenAttribute])),
@@ -248,13 +280,30 @@ enum AX {
     /// pages can't hang a replay.
     static func collect(from root: AXUIElement, origin: CGPoint?, limit: Int = 4000,
                         include: (String) -> Bool) -> [Found] {
+        collectBounded(from: root, origin: origin, limit: limit, include: include).found
+    }
+
+    /// Like `collect`, but also says whether the walk stopped early because it
+    /// hit the node cap or the time limit, so a match from a partial scan isn't
+    /// trusted as if everything had been looked at. Elements already visited are
+    /// skipped, so a tree that loops back on itself can't spin forever.
+    /// (Bounds and the visited check follow MacTape's SelectorResolver, MIT.)
+    static func collectBounded(from root: AXUIElement, origin: CGPoint?, limit: Int = 4000,
+                               seconds: Double = 4, include: (String) -> Bool) -> (found: [Found], truncated: Bool) {
         struct Item { let el: AXUIElement; let path: [PathStep]; let context: [String]; let siblings: SiblingCounter? }
         var queue = [Item(el: root, path: [], context: [], siblings: nil)]
         var head = 0
         var out: [Found] = []
-        while head < queue.count && head < limit {
+        var visited: [Int: [AXUIElement]] = [:]
+        let deadline = Date().addingTimeInterval(seconds)
+        var truncated = false
+        while head < queue.count {
+            if head >= limit || (head % 64 == 0 && Date() > deadline) { truncated = true; break }
             let item = queue[head]
             head += 1
+            let hash = Int(CFHash(item.el))
+            if visited[hash]?.contains(where: { CFEqual($0, item.el) }) == true { continue }
+            visited[hash, default: []].append(item.el)
             let a = fetch(item.el, nodeAttrs)
             let r = string(a[kAXRoleAttribute]) ?? "AXUnknown"
             let path = item.siblings.map { item.path + [PathStep(role: r, index: $0.next(r))] } ?? item.path
@@ -268,11 +317,69 @@ enum AX {
                 out.append(Found(element: item.el, node: n, snapshot: snapshot(n, origin: origin, path: path, context: item.context)))
             }
             let counter = SiblingCounter()
-            for child in elements(a[kAXChildrenAttribute]) {
+            // A single node with thousands of children (a huge table) can't starve the rest.
+            for child in elements(a[kAXChildrenAttribute]).prefix(1500) {
                 queue.append(Item(el: child, path: path, context: context, siblings: counter))
             }
         }
-        return out
+        return (out, truncated)
+    }
+
+    // MARK: Safety checks
+
+    /// True when the element under a point is the target itself, part of it, or a
+    /// container it sits in, in the same app. Anything else means something
+    /// (a banner, a popover, another window) is covering the target.
+    static func pointReaches(_ point: CGPoint, target: AXUIElement) -> Bool {
+        guard let hit = element(at: point) else { return true }   // can't tell: don't block
+        guard pid(hit) == pid(target) else { return false }
+        if CFEqual(hit, target) { return true }
+        // Part of the target: walk up from the hit.
+        var probe: AXUIElement? = element(hit, kAXParentAttribute)
+        for _ in 0..<12 {
+            guard let p = probe else { break }
+            if CFEqual(p, target) { return true }
+            probe = element(p, kAXParentAttribute)
+        }
+        // A container of the target: walk up from the target. Containers that
+        // float above other content (sheets, popovers, dialogs) don't count.
+        probe = element(target, kAXParentAttribute)
+        for _ in 0..<12 {
+            guard let p = probe else { break }
+            if CFEqual(p, hit) {
+                let r = role(hit)
+                return !["AXSheet", "AXPopover", "AXDialog"].contains(r)
+            }
+            probe = element(p, kAXParentAttribute)
+        }
+        return false
+    }
+
+    /// The text field with keyboard focus right now, its value, whether it's a
+    /// password field, and the name a person would give it.
+    struct FocusedField {
+        let element: AXUIElement
+        let value: String?
+        let secure: Bool
+        let label: String?
+    }
+
+    static func focusedField() -> FocusedField? {
+        let system = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(system, 0.5)
+        guard let el = element(system, kAXFocusedUIElementAttribute) else { return nil }
+        let a = fetch(el, [kAXRoleAttribute, kAXSubroleAttribute, kAXValueAttribute, kAXTitleAttribute,
+                           kAXDescriptionAttribute, "AXPlaceholderValue"])
+        let r = string(a[kAXRoleAttribute]) ?? ""
+        let secure = string(a[kAXSubroleAttribute]) == "AXSecureTextField"
+        var value: String?
+        if let v = a[kAXValueAttribute], CFGetTypeID(v) == CFStringGetTypeID() { value = (v as! String) }
+        if value == nil && !editableRoles.contains(r) && r != "AXWebArea" { return FocusedField(element: el, value: nil, secure: secure, label: nil) }
+        var label = string(a[kAXTitleAttribute]) ?? string(a["AXPlaceholderValue"]) ?? string(a[kAXDescriptionAttribute])
+        if label == nil, let t = element(el, kAXTitleUIElementAttribute) {
+            label = string(t, kAXValueAttribute) ?? string(t, kAXTitleAttribute)
+        }
+        return FocusedField(element: el, value: value, secure: secure, label: label.map { String($0.prefix(60)) })
     }
 
     /// A cheap summary of what a window looks like right now, for settle detection.
@@ -379,8 +486,10 @@ enum AX {
 
     /// Looks at what is under the mouse right now and describes it.
     /// Returns nil for our own windows, so we never record ourselves.
-    static func capture(at point: CGPoint) -> Capture? {
-        guard let hit = element(at: point) else { return nil }
+    /// - Parameter hit: what was under the point at the moment of the click, when
+    ///   already known. A menu item or a Submit button may be gone a moment later.
+    static func capture(at point: CGPoint, hit known: AXUIElement? = nil) -> Capture? {
+        guard let hit = known ?? element(at: point) else { return nil }
         let ownerPID = Self.pid(hit)
         if ownerPID == ProcessInfo.processInfo.processIdentifier { return nil }
 
@@ -434,7 +543,45 @@ enum AX {
             inMenu: inMenu,
             anchors: inMenu ? nil : Self.anchors(around: el, frame: n.frame, label: n.label, root: root),
             context: Self.context(of: el, stopAt: root),
-            windowSize: windowFrame?.size
+            windowSize: windowFrame?.size,
+            web: Self.webIdentity(of: el) ?? (Self.isBrowser(bundleID) ? window.flatMap { Self.webIdentity(inWindow: $0) } : nil)
         )
+    }
+
+    static func isBrowser(_ bundleID: String) -> Bool {
+        chromiumBrowsers.contains(bundleID) || bundleID.hasPrefix("com.apple.Safari") || bundleID == "org.mozilla.firefox"
+    }
+
+    // MARK: Web pages
+
+    /// The page an element belongs to, when it sits inside a browser's web area.
+    static func webIdentity(of el: AXUIElement) -> WebIdentity? {
+        var probe: AXUIElement? = el
+        for _ in 0..<40 {
+            guard let p = probe else { return nil }
+            if role(p) == "AXWebArea" { return url(of: p).flatMap(WebIdentity.init(url:)) }
+            probe = element(p, kAXParentAttribute)
+        }
+        return nil
+    }
+
+    static func url(of webArea: AXUIElement) -> URL? {
+        guard let v = raw(webArea, urlAttribute) else { return nil }
+        if CFGetTypeID(v) == CFURLGetTypeID() { return (v as! CFURL) as URL }
+        if let s = string(v) { return URL(string: s) }
+        return nil
+    }
+
+    /// The web page showing in a window right now, if it's a browser window.
+    static func webIdentity(inWindow window: AXUIElement) -> WebIdentity? {
+        let areas = collect(from: window, origin: nil, limit: 600) { $0 == "AXWebArea" }
+        // Several web areas (tabs, embedded frames): the biggest is the page.
+        func area(_ f: Found) -> CGFloat {
+            guard let r = f.node.frame else { return 0 }
+            return r.width * r.height
+        }
+        guard let page = areas.max(by: { area($0) < area($1) }) else { return nil }
+        guard let u = url(of: page.element) else { return nil }
+        return WebIdentity(url: u)
     }
 }

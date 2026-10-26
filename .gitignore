@@ -6,3 +6,6 @@ xcuserdata/
 .DS_Store
 build.log
 .rebuild
+self-test.txt
+.selftest-request
+.selftest-done

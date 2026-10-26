@@ -18,11 +18,13 @@ public struct TaskFile: Codable {
     public enum Failure: LocalizedError, Equatable {
         case notATask
         case newerVersion(Int)
+        case unsafe(String)
 
         public var errorDescription: String? {
             switch self {
             case .notATask: return "That file isn't a Deja Do task."
             case .newerVersion(let v): return "That task was saved by a newer Deja Do (format \(v)). Update the app to open it."
+            case .unsafe(let why): return "That task file looks damaged: \(why)"
             }
         }
     }
@@ -47,6 +49,7 @@ public struct TaskFile: Codable {
     }
 
     public static func decode(_ data: Data, now: Date = Date()) throws -> Automation {
+        guard data.count <= 32_000_000 else { throw Failure.unsafe("it is too large to be a task.") }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         guard let file = try? decoder.decode(TaskFile.self, from: data), file.format == formatName else {
@@ -54,9 +57,15 @@ public struct TaskFile: Codable {
         }
         guard file.version <= currentVersion else { throw Failure.newerVersion(file.version) }
         var a = file.automation
+        let problems = TaskValidator.problems(a)
+        guard problems.isEmpty else { throw Failure.unsafe(problems.joined(separator: " ")) }
         a.id = UUID()
         a.created = now
-        a.steps = a.steps.map { Step(id: UUID(), kind: $0.kind) }
+        a.steps = a.steps.map { step in
+            var copy = step
+            copy.id = UUID()
+            return copy
+        }
         return a
     }
 }

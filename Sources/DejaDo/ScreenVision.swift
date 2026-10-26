@@ -1,0 +1,198 @@
+import AppKit
+import ApplicationServices
+import ScreenCaptureKit
+import Vision
+@preconcurrency import DejaDoCore
+
+/// Looks at the screen itself: grabs a window's pixels with ScreenCaptureKit
+/// and reads its text with Apple's Vision framework. Used for apps that don't
+/// describe their buttons through Accessibility, and for checking steps.
+/// Nothing captured here leaves the Mac.
+enum ScreenVision {
+    static var hasPermission: Bool { CGPreflightScreenCaptureAccess() }
+
+    static func requestPermission() { _ = CGRequestScreenCaptureAccess() }
+
+    static func openSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    /// A window as pixels and text, in window points from its top left.
+    struct WindowRead {
+        /// Greyscale, one pixel per point.
+        let image: GrayImage
+        let lines: [OCRLine]
+
+        var thumbnail: GrayImage { image.resized(width: 128, height: 80) }
+    }
+
+    /// Captures a window's area of the screen and optionally reads its text.
+    /// Deja Do's own windows are left out of the picture.
+    static func read(windowFrame wf: CGRect, ocr: Bool, fast: Bool = false) async -> WindowRead? {
+        guard wf.width >= 4, wf.height >= 4, let captured = await capture(wf) else { return nil }
+        let (cg, shown) = captured
+        let size = CGSize(width: shown.width, height: shown.height)
+        var gray = Self.gray(cg, width: Int(size.width.rounded()), height: Int(size.height.rounded()))
+        var lines = ocr ? readText(cg, pointSize: size, fast: fast) : []
+
+        // Part of the window was off screen: put what we have where it belongs.
+        let dx = shown.minX - wf.minX, dy = shown.minY - wf.minY
+        if dx > 0.5 || dy > 0.5 || shown.width < wf.width - 0.5 || shown.height < wf.height - 0.5 {
+            var full = GrayImage(width: Int(wf.width.rounded()), height: Int(wf.height.rounded()), fill: UInt8(gray.mean.rounded()))
+            let ox = Int(dx.rounded()), oy = Int(dy.rounded())
+            for y in 0..<gray.height where y + oy < full.height {
+                for x in 0..<gray.width where x + ox < full.width { full[x + ox, y + oy] = gray[x, y] }
+            }
+            gray = full
+            lines = lines.map { OCRLine(text: $0.text, frame: $0.frame.offsetBy(dx: dx, dy: dy), confidence: $0.confidence) }
+        }
+        return WindowRead(image: gray, lines: lines)
+    }
+
+    /// Pixels of a rectangle of the screen, in global points with the origin
+    /// at the top left of the main display, the same space Accessibility uses.
+    /// Returns the image and the part of the rectangle it actually covers.
+    static func capture(_ rect: CGRect) async -> (CGImage, CGRect)? {
+        guard hasPermission else { return nil }
+        guard #available(macOS 14.0, *) else { return nil }
+        do {
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            let bounds = content.displays.map { CGDisplayBounds($0.displayID) }
+            // Every display the window is on, so one sitting across two comes out whole,
+            // and one whose centre falls in a gap between displays still comes out at all.
+            let pieces = ScreenGeometry.pieces(of: rect, on: bounds)
+            guard !pieces.isEmpty, let shown = ScreenGeometry.visible(rect, on: bounds) else { return nil }
+
+            let me = ProcessInfo.processInfo.processIdentifier
+            let own = content.applications.filter { $0.processID == me }
+            var shots: [(CGImage, CGRect, CGFloat)] = []
+            for piece in pieces {
+                let display = content.displays[piece.display]
+                let filter = SCContentFilter(display: display, excludingApplications: own, exceptingWindows: [])
+                let config = SCStreamConfiguration()
+                config.sourceRect = piece.rect.offsetBy(dx: -bounds[piece.display].minX, dy: -bounds[piece.display].minY)
+                // Full resolution, so small text still reads well.
+                let scale = CGFloat(filter.pointPixelScale)
+                config.width = max(1, Int((piece.rect.width * scale).rounded()))
+                config.height = max(1, Int((piece.rect.height * scale).rounded()))
+                config.showsCursor = false
+                let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+                shots.append((image, piece.rect, scale))
+            }
+            if shots.count == 1 { return (shots[0].0, shots[0].1) }
+            return compose(shots, into: shown).map { ($0, shown) }
+        } catch {
+            return nil
+        }
+    }
+
+    /// Puts the pieces from several displays into one picture of the window,
+    /// at the sharpest of their scales.
+    static func compose(_ shots: [(CGImage, CGRect, CGFloat)], into area: CGRect) -> CGImage? {
+        let scale = shots.map(\.2).max() ?? 1
+        let w = max(1, Int((area.width * scale).rounded())), h = max(1, Int((area.height * scale).rounded()))
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.setFillColor(CGColor(gray: 0.5, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        ctx.interpolationQuality = .high
+        for (image, rect, _) in shots {
+            // Core Graphics counts y from the bottom.
+            let x = (rect.minX - area.minX) * scale
+            let y = (area.maxY - rect.maxY) * scale
+            ctx.draw(image, in: CGRect(x: x, y: y, width: rect.width * scale, height: rect.height * scale))
+        }
+        return ctx.makeImage()
+    }
+
+    /// Greyscale copy at the given size in points, one pixel per point.
+    /// Drawing smaller averages pixels, so a Retina capture comes out clean.
+    static func gray(_ cg: CGImage, width w: Int, height h: Int) -> GrayImage {
+        guard w > 0, h > 0 else { return GrayImage(width: 0, height: 0, pixels: []) }
+        var pixels = [UInt8](repeating: 0, count: w * h)
+        pixels.withUnsafeMutableBytes { buf in
+            guard let ctx = CGContext(data: buf.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w,
+                                      space: CGColorSpaceCreateDeviceGray(),
+                                      bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return }
+            ctx.interpolationQuality = .medium
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        }
+        return GrayImage(width: w, height: h, pixels: pixels, scale: 1)
+    }
+
+    /// Text lines in the image, positioned in points within `pointSize`.
+    /// Runs synchronously, so call it off the main thread.
+    static func readText(_ cg: CGImage, pointSize: CGSize, fast: Bool) -> [OCRLine] {
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = fast ? .fast : .accurate
+        // UI labels are names and codes, not sentences: don't "correct" them.
+        request.usesLanguageCorrection = false
+        let handler = VNImageRequestHandler(cgImage: cg, options: [:])
+        do { try handler.perform([request]) } catch { return [] }
+        let w = pointSize.width, h = pointSize.height
+        return (request.results ?? []).compactMap { obs -> OCRLine? in
+            guard let best = obs.topCandidates(1).first else { return nil }
+            let text = best.string.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { return nil }
+            // Vision's boxes are 0...1 with the origin at the bottom left.
+            let b = obs.boundingBox
+            let frame = CGRect(x: b.minX * w, y: (1 - b.maxY) * h, width: b.width * w, height: b.height * h)
+            return OCRLine(text: text, frame: frame, confidence: Double(best.confidence))
+        }
+    }
+}
+
+/// Reads the front window before and after steps, for step checking.
+enum ScreenStateReader {
+    /// - Parameters:
+    ///   - pid: the app to read; the frontmost other app when nil.
+    ///   - ocr: also read the text in the pixels, for apps that don't describe themselves.
+    ///   - pixels: grab a tiny thumbnail to tell whether anything changed.
+    static func read(pid: pid_t?, ocr: Bool, pixels: Bool) async -> ScreenState {
+        await readFull(pid: pid, ocr: ocr, pixels: pixels).state
+    }
+
+    /// A read plus the window picture it came from, which the recorder reuses
+    /// for the picture around a click so it shows the screen before the click.
+    struct Full {
+        var state: ScreenState
+        var window: ScreenVision.WindowRead?
+        var windowFrame: CGRect?
+    }
+
+    static func readFull(pid: pid_t?, ocr: Bool, pixels: Bool) async -> Full {
+        let me = ProcessInfo.processInfo.processIdentifier
+        guard let app = pid.flatMap({ NSRunningApplication(processIdentifier: $0) })
+                ?? NSWorkspace.shared.frontmostApplication,
+              app.processIdentifier != me else { return Full(state: ScreenState()) }
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(appElement, 0.5)
+        let window = AX.element(appElement, kAXFocusedWindowAttribute)
+        let wf = window.flatMap { AX.frame($0) }
+
+        var state = ScreenState(bundleID: app.bundleIdentifier,
+                                windowTitle: window.flatMap { AX.string($0, kAXTitleAttribute) },
+                                windowSize: wf?.size)
+        if let window {
+            let found = AX.collect(from: window, origin: wf?.origin, limit: 1200) { AX.matchRoles.contains($0) }
+            var seen = Set<String>()
+            for f in found {
+                guard let label = f.node.label, label.count <= 80 else { continue }
+                // Keep repeats: a name showing twice (list and header) is how a step's result shows.
+                let key = "\(TextSimilarity.normalize(label))|\(Int(f.snapshot.frame?.midX ?? -1))|\(Int(f.snapshot.frame?.midY ?? -1))"
+                guard seen.insert(key).inserted else { continue }
+                state.texts.append(SeenText(label, frame: f.snapshot.frame))
+            }
+        }
+        var picture: ScreenVision.WindowRead?
+        if (ocr || pixels), let wf, let read = await ScreenVision.read(windowFrame: wf, ocr: ocr) {
+            if ocr { state.merge(ocr: read.lines) }
+            if pixels { state.thumbnail = read.thumbnail }
+            picture = read
+        }
+        return Full(state: state, window: picture, windowFrame: wf)
+    }
+}

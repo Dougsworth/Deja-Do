@@ -72,6 +72,17 @@ enum Keychain {
 
 /// Small modal prompts used while an automation runs.
 enum Prompt {
+    /// A yes or no question. Returns true for yes.
+    static func confirm(_ question: String, detail: String) -> Bool {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = question
+        alert.informativeText = detail
+        alert.addButton(withTitle: "Continue")
+        alert.addButton(withTitle: "Stop")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
     static func text(_ message: String, secret: Bool) -> String? {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()

@@ -116,6 +116,21 @@ public struct MatchReport {
     public let anchorsMatched: Int
 
     public var best: RankedCandidate? { ranked.first }
+
+    public init(decision: MatchDecision, ranked: [RankedCandidate], shift: CGVector?, anchorsMatched: Int) {
+        self.decision = decision
+        self.ranked = ranked
+        self.shift = shift
+        self.anchorsMatched = anchorsMatched
+    }
+
+    /// The same report when the window couldn't be scanned completely: the real
+    /// target may not have been looked at, so only a near perfect match stays confident.
+    public func incomplete() -> MatchReport {
+        guard case .confident(let top) = decision, top.score < 0.95 else { return self }
+        return MatchReport(decision: .ambiguous(Array(ranked.prefix(12))), ranked: ranked, shift: shift,
+                           anchorsMatched: anchorsMatched)
+    }
 }
 
 /// Finds a recorded element among the elements on screen now.
@@ -169,6 +184,16 @@ public struct MatchEngine {
         let margin = top.score - (runnerUp?.score ?? 0)
         if top.score >= acceptScore && margin >= requiredMargin / 2 { return .confident(top) }
         if top.score >= acceptWithMargin && margin >= requiredMargin { return .confident(top) }
+        // The only control with exactly this label and this kind of role is it,
+        // however far the layout moved it. A reflowed page or a resized window
+        // changes position, path and neighbours all at once, but not the label.
+        if (top.features[.text] ?? 0) >= 0.97, (top.features[.role] ?? 0) >= 0.85, top.score >= plausibleScore,
+           !ranked.dropFirst().contains(where: {
+               (($0.features[.text] ?? 0) >= 0.9) && (($0.features[.role] ?? 0) > 0)
+                   && !Self.sameTarget(candidates[top.index], candidates[$0.index])
+           }) {
+            return .confident(top)
+        }
         if top.score >= plausibleScore { return .ambiguous(Array(ranked.prefix(ambiguousTopK))) }
         return .notFound(Array(ranked.prefix(150)))
     }

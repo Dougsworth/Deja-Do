@@ -49,5 +49,33 @@ final class TextSimilarityTests: XCTestCase {
         XCTAssertFalse(TextSimilarity.isStableIdentifier(nil))
         XCTAssertTrue(TextSimilarity.isStableIdentifier("saveButton"))
         XCTAssertTrue(TextSimilarity.isStableIdentifier("toolbar.export"))
+        // Web ids made up at load time.
+        XCTAssertFalse(TextSimilarity.isStableIdentifier("mui-12"))
+        XCTAssertFalse(TextSimilarity.isStableIdentifier(":r3:"))
+        XCTAssertFalse(TextSimilarity.isStableIdentifier("ember123"))
+        XCTAssertFalse(TextSimilarity.isStableIdentifier("field-12"))
+        XCTAssertFalse(TextSimilarity.isStableIdentifier("item_307"))
+        XCTAssertTrue(TextSimilarity.isStableIdentifier("submit"))
+        XCTAssertTrue(TextSimilarity.isStableIdentifier("email-field"))
+        XCTAssertTrue(TextSimilarity.isStableIdentifier("step-2"), "a single digit is usually a real name")
+    }
+
+    func testSymbolLabelsAreTheirOwnText() {
+        // Calculator style buttons: the symbol is the whole label.
+        XCTAssertEqual(TextSimilarity.normalize("+"), "+")
+        XCTAssertEqual(TextSimilarity.similarity("=", "="), 1)
+        XCTAssertLessThan(TextSimilarity.similarity("+", "=") ?? 1, 0.5)
+        XCTAssertEqual(TextSimilarity.normalize("Save…"), "save", "words still drop their punctuation")
+        XCTAssertNil(TextSimilarity.similarity("  ", "+"), "blank is still no text")
+    }
+}
+
+final class WindowTitleTests: XCTestCase {
+    func testTitlesDifferingOnlyByNumberAreTheSameKind() {
+        XCTAssertTrue(WindowTitles.sameKind("Untitled 2", "Untitled"))
+        XCTAssertTrue(WindowTitles.sameKind("Invoice 1043", "Invoice 1042"))
+        XCTAssertTrue(WindowTitles.sameKind("Report.pdf", "Report.pdf"))
+        XCTAssertFalse(WindowTitles.sameKind("Inbox", "Sent"))
+        XCTAssertFalse(WindowTitles.sameKind("12", "34"), "nothing but numbers is not a title")
     }
 }

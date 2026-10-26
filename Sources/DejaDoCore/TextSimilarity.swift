@@ -9,7 +9,16 @@ import Foundation
 /// a different button does not.
 public enum TextSimilarity {
     /// Lowercase, strip accents and punctuation, collapse whitespace.
+    /// A label made only of symbols ("+", "=", "…") keeps its symbols, since
+    /// they are the whole label, rather than collapsing to nothing.
     public static func normalize(_ s: String) -> String {
+        let words = normalizeWords(s)
+        if !words.isEmpty { return words }
+        return s.folding(options: [.caseInsensitive, .widthInsensitive], locale: nil)
+            .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
+    private static func normalizeWords(_ s: String) -> String {
         let folded = s.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
         var out = ""
         out.reserveCapacity(folded.count)
@@ -91,6 +100,11 @@ public enum TextSimilarity {
         guard let a, let b else { return nil }
         let na = normalize(a), nb = normalize(b)
         guard !na.isEmpty, !nb.isEmpty else { return nil }
+        // A symbol only label ("+", "…") only compares with another one; against
+        // words it says nothing either way.
+        let symbolsA = normalizeWords(a).isEmpty, symbolsB = normalizeWords(b).isEmpty
+        if symbolsA != symbolsB { return nil }
+        if symbolsA { return na == nb ? 1 : 0 }
         if na == nb { return 1 }
 
         let da = withoutDigits(na), db = withoutDigits(nb)
@@ -123,9 +137,19 @@ public enum TextSimilarity {
 
     /// Generated identifiers (`_NS:123`, UUIDs, long hex or number runs) change
     /// on every launch, so matching on them does more harm than good.
+    /// Prefixes web frameworks put on ids they make up at load time.
+    static let generatedPrefixes = ["mui-", "ember", "react-", "radix-", "headlessui-", "downshift-", "rc_", "rc-", ":r", "ng-", "yui_", "ext-", "gwt-uid"]
+
     public static func isStableIdentifier(_ id: String?) -> Bool {
         guard let id, !id.isEmpty else { return false }
         if id.hasPrefix("_NS:") { return false }
+        let lower = id.lowercased()
+        if lower.contains(":") || generatedPrefixes.contains(where: { lower.hasPrefix($0) }) { return false }
+        // "field-12", "item_307": numbered at load time, different next time.
+        if let sep = lower.lastIndex(where: { $0 == "-" || $0 == "_" }) {
+            let tail = lower[lower.index(after: sep)...]
+            if tail.count >= 2, tail.allSatisfy(\.isNumber) { return false }
+        }
         var digitRun = 0, hexRun = 0, maxDigit = 0, maxHex = 0
         for ch in id {
             if ch.isNumber { digitRun += 1 } else { digitRun = 0 }
@@ -137,5 +161,18 @@ public enum TextSimilarity {
         let dashed = id.split(separator: "-")
         if dashed.count == 5, dashed.allSatisfy({ $0.allSatisfy(\.isHexDigit) }) { return false }
         return true
+    }
+}
+
+/// Comparing window titles across runs.
+public enum WindowTitles {
+    /// Same title once numbers are set aside: "Untitled" and "Untitled 2",
+    /// "Invoice 1042" and "Invoice 1043". Titles with no words left don't count.
+    public static func sameKind(_ a: String, _ b: String) -> Bool {
+        let x = TextSimilarity.normalize(a), y = TextSimilarity.normalize(b)
+        if x == y { return true }
+        let dx = TextSimilarity.withoutDigits(x).trimmingCharacters(in: .whitespaces)
+        let dy = TextSimilarity.withoutDigits(y).trimmingCharacters(in: .whitespaces)
+        return !dx.isEmpty && dx == dy
     }
 }
