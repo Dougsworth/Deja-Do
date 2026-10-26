@@ -5,7 +5,7 @@ import AppKit
 /// Opens .dejado files double-clicked in Finder or dropped on the app.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
-        if SelfTest.requested { SelfTest.start() }
+        if SelfTest.requested { SelfTest.start() } else { _ = Updates.shared }
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -110,6 +110,10 @@ struct MenuContent: View {
         Divider()
         Button("Open Deja Do") { openMain() }
             .keyboardShortcut("o")
+        if Updates.shared.isAvailable {
+            Button("Check for Updates…") { Updates.shared.check() }
+        }
+        Button("Send Feedback…") { model.exportFeedback() }
         Button("Quit Deja Do") { NSApp.terminate(nil) }
             .keyboardShortcut("q")
     }

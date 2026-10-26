@@ -813,6 +813,80 @@ final class AppModel: ObservableObject, @unchecked Sendable {
         }
     }
 
+    /// A zip for a beta tester to send back: what Deja Do knows about how their
+    /// tasks went, without anything they typed, any password or key, or any picture.
+    func exportFeedback() {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Save a feedback file?"
+        alert.informativeText = """
+        It holds Deja Do's version and your Mac's setup, each task's steps as the step list shows them         (buttons and apps, never what was typed), how recent runs went, and the repair records.         No passwords, AI keys or screenshots. Nothing is sent: you choose where to save it, then send it yourself.
+        """
+        alert.addButton(withTitle: "Choose Where to Save…")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let panel = NSSavePanel()
+        let day = ISO8601DateFormatter.string(from: Date(), timeZone: .current, formatOptions: [.withFullDate])
+        panel.nameFieldStringValue = "Deja Do feedback \(day).zip"
+        panel.allowedContentTypes = [.zip]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("Deja Do feedback \(UUID().uuidString.prefix(6))", isDirectory: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+
+        var about: [String] = []
+        about.append("Deja Do \(Updates.shared.version)")
+        about.append("macOS \(ProcessInfo.processInfo.operatingSystemVersionString)")
+        var size = 0
+        sysctlbyname("hw.model", nil, &size, nil, 0)
+        var model = [CChar](repeating: 0, count: max(size, 1))
+        sysctlbyname("hw.model", &model, &size, nil, 0)
+        about.append("Mac \(String(cString: model)), \(NSScreen.screens.count) display\(NSScreen.screens.count == 1 ? "" : "s")")
+        about.append("Language \(Locale.preferredLanguages.first ?? "?")")
+        about.append("Permissions: Accessibility \(hasAccessibility ? "on" : "off"), Input Monitoring \(hasInputMonitoring ? "on" : "off"), Screen Recording \(hasScreenRecording ? "on" : "off")")
+        about.append("Settings: use the screen \(useVision ? "on" : "off"), check steps \(checkSteps ? "on" : "off"), ask before risky \(askBeforeRisky ? "on" : "off"), AI \(aiEnabled ? aiProvider.name : "off"), local web address \(webhooksEnabled ? "on" : "off")")
+        about.append("\(automations.count) tasks, \(corpus.count) repair records")
+        try? about.joined(separator: "\n").write(to: dir.appendingPathComponent("about.txt"), atomically: true, encoding: .utf8)
+
+        var tasks: [String] = []
+        for a in automations {
+            var lines = ["# \(a.name)"]
+            let apps = Set(a.steps.compactMap { step -> String? in
+                switch step.kind {
+                case .click(let t, _, _, _), .read(let t, _): return t.appName
+                case .activate(_, let n): return n
+                default: return nil
+                }
+            })
+            lines.append("Apps: " + apps.sorted().joined(separator: ", "))
+            if let s = a.schedule, s.on { lines.append("Schedule: " + s.summary(calendar: .current)) }
+            lines.append("Runs: \(a.runs), AI fixes: \(a.repairs), last run \(a.lastSucceeded == false ? "failed" : "ok")")
+            for (i, step) in a.steps.enumerated() {
+                lines.append("\(i + 1). \(step.safeSummary)\(step.isEnabled ? "" : " (skipped)")\(a.risk(at: i).risk == .risky ? " [risky]" : "")")
+            }
+            tasks.append(lines.joined(separator: "\n"))
+        }
+        try? tasks.joined(separator: "\n\n").write(to: dir.appendingPathComponent("tasks.txt"), atomically: true, encoding: .utf8)
+        try? fm.copyItem(at: history.dir, to: dir.appendingPathComponent("history"))
+        if fm.fileExists(atPath: corpus.url.path) { try? fm.copyItem(at: corpus.url, to: dir.appendingPathComponent("repairs.jsonl")) }
+
+        try? fm.removeItem(at: url)
+        let zip = Process()
+        zip.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        zip.arguments = ["-c", "-k", "--keepParent", dir.path, url.path]
+        do {
+            try zip.run()
+            zip.waitUntilExit()
+            guard zip.terminationStatus == 0 else { throw CocoaError(.fileWriteUnknown) }
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+            status = "Saved \(url.lastPathComponent). Send it along with a line about what went wrong."
+        } catch {
+            status = "Couldn't save the feedback file: \(error.localizedDescription)"
+        }
+    }
+
     /// Saves the repair records somewhere the person chooses, as JSON lines.
     func exportRepairs() {
         let panel = NSSavePanel()

@@ -414,20 +414,20 @@ enum WebSelfTest {
 
     static func click(field: String) async -> Bool {
         guard let f = Self.field(field), let frame = f.node.frame else { return false }
-        Input.click(at: CGPoint(x: frame.midX, y: frame.midY), button: .left, count: 1, modifiers: 0)
+        guard TestInput.click(CGPoint(x: frame.midX, y: frame.midY), in: browserID) else { return false }
         try? await Task.sleep(nanoseconds: 900_000_000)
         return true
     }
 
     static func click(button: String) async -> Bool {
         guard let f = find(role: "AXButton", labelled: [button]), let frame = f.node.frame else { return false }
-        Input.click(at: CGPoint(x: frame.midX, y: frame.midY), button: .left, count: 1, modifiers: 0)
+        guard TestInput.click(CGPoint(x: frame.midX, y: frame.midY), in: browserID) else { return false }
         try? await Task.sleep(nanoseconds: 900_000_000)
         return true
     }
 
     static func type(_ text: String) -> Bool {
-        let ok = Input.type(text)
+        let ok = TestInput.type(text, in: browserID)
         usleep(900_000)
         return ok
     }
@@ -451,7 +451,7 @@ enum WebSelfTest {
             guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == browserID,
                   let front = AX.element(el, kAXFocusedWindowAttribute),
                   AX.string(front, kAXTitleAttribute)?.contains(pageTitle) == true else { break }
-            Input.key(13, modifiers: CGEventFlags.maskCommand.rawValue)   // ⌘W
+            TestInput.key(13, modifiers: CGEventFlags.maskCommand.rawValue, in: browserID)   // ⌘W
             try? await Task.sleep(nanoseconds: 350_000_000)
         }
     }

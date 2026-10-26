@@ -146,7 +146,7 @@ enum AppsSelfTest {
         }
         try? await Task.sleep(nanoseconds: 1_500_000_000)
         var acted = await clickPage()
-        acted = Input.type(sentence) && acted
+        acted = TestInput.type(sentence, in: textEditID) && acted
         try? await Task.sleep(nanoseconds: 900_000_000)
         key(1, command: true)                 // ⌘S
         try? await Task.sleep(nanoseconds: 1_600_000_000)
@@ -318,13 +318,13 @@ enum AppsSelfTest {
 
     static func clickPage() async -> Bool {
         guard let t = textArea(), let f = AX.frame(t) else { return false }
-        Input.click(at: CGPoint(x: f.minX + 60, y: f.minY + 30), button: .left, count: 1, modifiers: 0)
+        guard TestInput.click(CGPoint(x: f.minX + 60, y: f.minY + 30), in: textEditID) else { return false }
         try? await Task.sleep(nanoseconds: 900_000_000)
         return true
     }
 
     static func key(_ code: UInt16, command: Bool) {
-        Input.key(code, modifiers: command ? CGEventFlags.maskCommand.rawValue : 0)
+        TestInput.key(code, modifiers: command ? CGEventFlags.maskCommand.rawValue : 0, in: textEditID)
     }
 
     /// Closes only the Untitled documents this test made, telling TextEdit to

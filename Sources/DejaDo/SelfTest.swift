@@ -56,6 +56,8 @@ enum SelfTest {
         /// - Parameter counted: false for stretch goals, reported but not failing the run.
         func check(_ name: String, _ ok: Bool, _ detail: String = "", counted: Bool = true) {
             if !ok && counted { failures += 1 }
+            let held = SelfTest.Guard.shared.take()
+            if !held.isEmpty { line("      held back: " + held.prefix(3).joined(separator: "; ")) }
             let tag = ok ? "PASS" : (counted ? "FAIL" : "MISS")
             line("\(tag)  \(name)\(detail.isEmpty ? "" : " · " + detail)")
         }
@@ -68,6 +70,16 @@ enum SelfTest {
         log.check("Accessibility allowed", AXIsProcessTrusted())
         log.check("Input Monitoring allowed", CGPreflightListenEventAccess())
         guard AXIsProcessTrusted(), CGPreflightListenEventAccess() else { return false }
+        // Never drive the Mac while someone is using it.
+        if idleSeconds < 20 {
+            log.check("Nobody is using the Mac", false,
+                      String(format: "the mouse or keyboard was used %.0f seconds ago; the test only starts after 20 quiet seconds", idleSeconds))
+            return false
+        }
+        if AppModel.screenLocked {
+            log.check("The screen is unlocked", false)
+            return false
+        }
         let vision = ScreenVision.hasPermission
         log.line("Screen Recording \(vision ? "allowed, vision checks will run" : "not allowed, vision checks skipped")")
 
@@ -314,7 +326,7 @@ enum SelfTest {
         CGEvent(mouseEventSource: Input.source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)?
             .post(tap: .cghidEventTap)
         try? await Task.sleep(nanoseconds: 400_000_000)
-        Input.key(15, modifiers: CGEventFlags.maskControl.rawValue | CGEventFlags.maskAlternate.rawValue)   // ⌃⌥R
+        TestInput.key(15, modifiers: CGEventFlags.maskControl.rawValue | CGEventFlags.maskAlternate.rawValue, in: calculatorID)   // ⌃⌥R
         try? await Task.sleep(nanoseconds: 1_000_000_000)
         let steps: [Step] = await withCheckedContinuation { cont in
             DispatchQueue.main.async { recorder.finish { cont.resume(returning: $0) } }
@@ -399,7 +411,7 @@ enum SelfTest {
         guard let bar = menuBar(),
               let item = AX.children(bar).first(where: { AX.string($0, kAXTitleAttribute) == title }),
               let f = AX.frame(item) else { return false }
-        Input.click(at: CGPoint(x: f.midX, y: f.midY), button: .left, count: 1, modifiers: 0)
+        guard TestInput.click(CGPoint(x: f.midX, y: f.midY), in: calculatorID) else { return false }
         try? await Task.sleep(nanoseconds: 900_000_000)
         return true
     }
@@ -408,7 +420,7 @@ enum SelfTest {
         guard let bar = menuBar() else { return false }
         let items = AX.collect(from: bar, origin: nil, limit: 800) { $0 == "AXMenuItem" }
         guard let item = items.first(where: { $0.node.title == title }), let f = item.node.frame, f.width > 0 else { return false }
-        Input.click(at: CGPoint(x: f.midX, y: f.midY), button: .left, count: 1, modifiers: 0)
+        guard TestInput.click(CGPoint(x: f.midX, y: f.midY), in: calculatorID) else { return false }
         try? await Task.sleep(nanoseconds: 900_000_000)
         return true
     }
@@ -560,6 +572,10 @@ enum SelfTest {
             CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: p, mouseButton: .left)?
                 .post(tap: .cghidEventTap)
         }
+        guard TestInput.front(calculatorID), let hit = AX.element(at: start), AX.pid(hit) == TestInput.pid(calculatorID) else {
+            Guard.shared.blocked("dragging Calculator's title bar, something else was there")
+            return
+        }
         post(.mouseMoved, start)
         usleep(80_000)
         post(.leftMouseDown, start)
@@ -652,7 +668,7 @@ enum SelfTest {
         NSRunningApplication.runningApplications(withBundleIdentifier: calculatorID).first?
             .activate(options: [.activateIgnoringOtherApps])
         try? await Task.sleep(nanoseconds: 300_000_000)
-        Input.key(basic ? 18 : 19, modifiers: CGEventFlags.maskCommand.rawValue)
+        TestInput.key(basic ? 18 : 19, modifiers: CGEventFlags.maskCommand.rawValue, in: calculatorID)
         try? await Task.sleep(nanoseconds: 900_000_000)
     }
 
@@ -668,7 +684,7 @@ enum SelfTest {
             [f.node.label, f.node.title, f.node.desc].contains { $0.map { wanted.contains(key($0)) } ?? false }
         }
         guard let frame = hit?.node.frame else { return false }
-        Input.click(at: CGPoint(x: frame.midX, y: frame.midY), button: .left, count: 1, modifiers: 0)
+        guard TestInput.click(CGPoint(x: frame.midX, y: frame.midY), in: calculatorID) else { return false }
         // About the pace a person clicks at, so the recorder sees each result settle.
         try? await Task.sleep(nanoseconds: 1_000_000_000)
         return true
