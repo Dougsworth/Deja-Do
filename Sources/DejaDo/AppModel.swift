@@ -742,16 +742,36 @@ final class AppModel: ObservableObject, @unchecked Sendable {
               let a = automations.first(where: { $0.id == stop.automationID }) else { return }
         guard Permissions.inputMonitoring else { Permissions.requestInputMonitoring(); return }
         isTeachingPopup = true
-        status = "Close the thing in the way, the way you normally would. Deja Do is watching for one click or key press."
+        // The app the run was in when it stopped, not Deja Do, whose button was just clicked.
+        var bundleID: String?
+        for step in a.steps.prefix(stop.step + 1) {
+            switch step.kind {
+            case .activate(let id, _): bundleID = id
+            case .click(let t, _, _, _), .read(let t, _): bundleID = t.bundleID
+            default: break
+            }
+        }
+        let target = bundleID.flatMap { ElementFinder.runningApp($0) }
+        guard let target else {
+            isTeachingPopup = false
+            status = "The app this task was using isn't open. Open it with the popup showing, then try again."
+            return
+        }
+        let appName = target.localizedName ?? "the app"
+        target.activate(options: [.activateIgnoringOtherApps])
+        status = "In \(appName), close the thing in the way, the way you normally would. Deja Do is watching for one click or key press."
         let normal: ScreenState? = nil
+        let ocr = visionActive
+        let pid = target.processIdentifier
         Task.detached { [weak self] in
-            let now = await ScreenStateReader.read(pid: nil, ocr: false, pixels: false)
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            let now = await ScreenStateReader.read(pid: pid, ocr: ocr, pixels: false)
             let signature = PopupRule.signature(now: now, normal: normal)
             await MainActor.run {
                 guard let self else { return }
                 guard !signature.isEmpty else {
                     self.isTeachingPopup = false
-                    self.status = "Couldn't see anything to recognise it by. Make sure the popup is showing, then try again."
+                    self.status = "Couldn't see a popup or message in \(appName) to recognise next time. If something is in the way, leave it showing and click “Something in the way?” again. If nothing is, the run stopped for another reason: open Run history to see it."
                     return
                 }
                 let watcher = Recorder()

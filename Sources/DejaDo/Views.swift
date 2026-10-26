@@ -371,6 +371,7 @@ struct HeaderBar<Title: View, Actions: View>: View {
 
 struct StatusBar: View {
     @EnvironmentObject var model: AppModel
+    @State private var showDetails = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -398,6 +399,9 @@ struct StatusBar: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
+                        .contentShape(Rectangle())
+                        .onTapGesture { if hasDetails { showDetails = true } }
+                        .help(hasDetails ? "Click for the whole message and what to do next" : "")
                 }
                 Spacer(minLength: 12)
                 actions
@@ -415,6 +419,15 @@ struct StatusBar: View {
             ShortcutHint(label: "Read the text under the pointer", keys: "⌃⌥R")
             ShortcutHint(label: "Save", keys: "⌘↩")
         } else {
+            if hasDetails {
+                Button("Details") { showDetails = true }
+                    .buttonStyle(.plain)
+                    .font(.ui(11, .medium))
+                    .foregroundStyle(Brand.cobalt)
+                    .popover(isPresented: $showDetails, arrowEdge: .top) {
+                        StatusDetails(state: state).environmentObject(model)
+                    }
+            }
             if model.lastStop != nil && !model.isTeachingPopup {
                 Button("Something in the way?") { model.teachPopup() }
                     .buttonStyle(.plain)
@@ -433,6 +446,14 @@ struct StatusBar: View {
 
     private var running: Automation? {
         model.runningID.flatMap { id in model.automations.first { $0.id == id } }
+    }
+
+    /// Something worth opening: a stop, a failure, or a message too long for one line.
+    private var hasDetails: Bool {
+        guard model.runningID == nil, !model.isRecording else { return false }
+        if model.lastStop != nil { return true }
+        if let r = model.lastResult, r.ending != .completed { return true }
+        return (model.status ?? "").count > 70
     }
 
     private var progress: Double? {
@@ -774,6 +795,102 @@ struct AutomationView: View {
 }
 
 enum StepState { case idle, current, done }
+
+/// Everything behind the status line: the whole message, the step it stopped
+/// on and what that step saw, and what to do next.
+struct StatusDetails: View {
+    @EnvironmentObject var model: AppModel
+    let state: RunState
+
+    private var stopped: (task: Automation, index: Int)? {
+        guard let s = model.lastStop, let a = model.automations.first(where: { $0.id == s.automationID }),
+              a.steps.indices.contains(s.step) else { return nil }
+        return (a, s.step)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 7) {
+                Image(systemName: state.symbol).foregroundStyle(state.color)
+                Text(state.word).font(.ui(13, .semibold)).foregroundStyle(Brand.ink)
+                if let name = stopped?.task.name ?? model.lastResult?.name {
+                    Text(name).font(.ui(13)).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
+            if let r = model.lastResult, r.ending != .completed, !r.message.isEmpty {
+                section("What happened", r.message)
+            }
+            if let s = stopped {
+                let step = s.task.steps[s.index]
+                section("Stopped at step \(s.index + 1)", step.safeSummary)
+                if let note = model.runNotes[step.id], !note.isEmpty {
+                    section("What it saw", note)
+                }
+            }
+            if let status = model.status, status != model.lastResult?.message, !status.isEmpty {
+                section("Latest", status)
+            }
+            section("What you can do", advice)
+            Divider()
+            HStack(spacing: 16) {
+                if let s = stopped {
+                    Button("Run history") { model.historyFor = s.task.id }
+                        .buttonStyle(.plain).foregroundStyle(Brand.cobalt)
+                }
+                Button("Copy details") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(plainText, forType: .string)
+                }
+                .buttonStyle(.plain).foregroundStyle(.secondary)
+            }
+            .font(.ui(12, .medium))
+        }
+        .padding(18)
+        .frame(width: 420, alignment: .leading)
+    }
+
+    private func section(_ title: String, _ body: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title).font(.ui(11, .semibold)).foregroundStyle(.secondary)
+            Text(body).font(.ui(12)).foregroundStyle(Brand.ink)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+        }
+    }
+
+    /// Plain next steps for the usual reasons a run stops.
+    private var advice: String {
+        let text = ((model.lastResult?.message ?? "") + " " + (model.status ?? "")).lowercased()
+        if text.contains("permission") || text.contains("accessibility") || text.contains("input monitoring") {
+            return "Open System Settings › Privacy & Security and turn Deja Do on under Accessibility, Input Monitoring and Screen Recording. After a new build you may need to turn it off and on again."
+        }
+        if text.contains("couldn't find") || text.contains("not found") || text.contains("couldn't see") {
+            return "Open the app where the task expects it, with the same chat, page or window showing, and run again. If a popup or banner covers it, click “Something in the way?” and close it once so Deja Do learns to."
+        }
+        if text.contains("expected") {
+            return "The step worked but the screen looked different afterwards. If the new result is fine, open the step and set “If it doesn't match” to “Keep going”."
+        }
+        if text.contains("lost focus") || text.contains("in front") {
+            return "Another app came to the front during the run. Leave the Mac alone while a task runs, or turn off notifications for that app."
+        }
+        if text.contains("may already have") {
+            return "A step that sends or saves had already run, so check the app before running again, or it may happen twice."
+        }
+        return "Check the step it stopped at, then run again. Run history keeps the notes from each run."
+    }
+
+    private var plainText: String {
+        var lines = [state.word]
+        if let r = model.lastResult, !r.message.isEmpty { lines.append(r.message) }
+        if let s = stopped {
+            let step = s.task.steps[s.index]
+            lines.append("Step \(s.index + 1): \(step.safeSummary)")
+            if let note = model.runNotes[step.id] { lines.append(note) }
+        }
+        if let status = model.status, status != model.lastResult?.message { lines.append(status) }
+        return lines.joined(separator: "\n")
+    }
+}
 
 /// Why the last run stopped, in full, under the task's title. Stays until the
 /// next run, so it's there when you come back to the task.
