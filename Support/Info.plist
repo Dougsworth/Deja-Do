@@ -10,6 +10,8 @@
     <string>Deja Do</string>
     <key>CFBundleExecutable</key>
     <string>DejaDo</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -33,6 +35,14 @@
             </array>
         </dict>
     </array>
+    <key>SUFeedURL</key>
+    <string>https://github.com/Dougsworth/Deja-Do/releases/latest/download/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string></string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
+    <key>SUScheduledCheckInterval</key>
+    <integer>86400</integer>
     <key>DejaDoServerURL</key>
     <string></string>
     <key>CFBundleDocumentTypes</key>

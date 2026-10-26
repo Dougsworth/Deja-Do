@@ -12,13 +12,14 @@ You need Xcode or the Xcode command line tools (`xcode-select --install`).
 ./build.sh run     # build "Deja Do.app" and open it
 ./build.sh test    # run the matching engine's tests
 ./build.sh selftest   # drive Calculator, a web form in Safari and TextEdit with real clicks (results in self-test.txt)
-./build.sh release    # sign with Developer ID, notarize, and zip it to send to people
+./build.sh keys       # once: make the update signing key (stays in your keychain)
+./build.sh release 0.4.0   # sign, notarize, sign the update and publish it as a GitHub release
 ```
 
 The self test drives real apps with real mouse and keyboard events. Keep hands off for about fifteen minutes. `SUITE=calculator`, `SUITE=web`, `SUITE=chrome` or `SUITE=apps` runs one part. Parts whose app isn't installed, isn't signed in, or would mean touching the person's own documents are reported as skipped rather than failed.
 
-- **Calculator.** Records 7 + 8 =, replays it as recorded, in the Scientific layout, after the window moves, from the screen alone, and on a second display when one is connected. Checks that a step whose screen doesn't match stops without repeating, that another app jumping in front is handled, that Esc stops a long wait at once, and that the task can be started over the local web address. Then reopens Calculator in Spanish and records and replays it there.
-- **Web form, in Safari and in Chrome.** Deja Do serves itself a small form. The page can break itself the ways real sites do, and it counts every real submission, so "sent exactly once" is proven rather than assumed. One recording is replayed against fourteen versions: unchanged, button renamed, button relabelled to a different word, fields reordered and button moved, form loading late, result showing slowly, form below the fold, DOM ids random on each load, a lookalike button beside the real one, a cookie banner over the form (before and after Deja Do is shown how to close it), a new confirm dialog, all of the above at once, and the same form on a different website. Each must submit exactly once with the right values or stop with nothing sent. Submitting twice fails the whole run. The form is also recorded and replayed in Spanish, where "Enviar" must be recognised as a risky step.
+- **Calculator.** Records 7 + 8 =, replays it as recorded, in the Scientific layout, after the window moves, from the screen alone, and on a second display when one is connected. Checks that a step whose screen doesn't match stops without repeating, that another app jumping in front is handled, that Esc stops a long wait at once, and that the task can be started over the local web address. Records a read step over the display and checks it reads 15, then 81 after a different sum. Records View › Scientific from the menu bar and replays it. Then reopens Calculator in Spanish and records and replays it there. Every click and key press the test makes first checks the intended app is in front and under the pointer, and the test won't start within 20 seconds of someone using the Mac.
+- **Web form, in Safari and in Chrome.** Deja Do serves itself a small form. The page can break itself the ways real sites do, and it counts every real submission, so "sent exactly once" is proven rather than assumed. One recording is replayed against fourteen versions: unchanged, button renamed, button relabelled to a different word, fields reordered and button moved, form loading late, result showing slowly, form below the fold, DOM ids random on each load, a lookalike button beside the real one, a cookie banner over the form (before and after Deja Do is shown how to close it), a new confirm dialog, all of the above at once, and the same form on a different website. Each must submit exactly once with the right values or stop with nothing sent. Submitting twice fails the whole run. The form is also recorded and replayed in Spanish, where "Enviar" must be recognised as a risky step. **AI repair** is tested against a stand-in AI service that answers like Ollama: with the button relabelled, moved and given a new id, AI must pick it, you must be asked before it's clicked, it must be sent once, and the next run must need no AI; saying no, or AI finding nothing, must stop with nothing sent. If an AI service is set up in Settings, it's tried too, reported but not counted.
 - **Desktop apps.** TextEdit: typing and ⌘S, replayed into a new document (the text must land once), and a ⌘S whose result doesn't match stops without being pressed again; repeated in Spanish when none of the person's own TextEdit documents are open. Excel: 1234, Tab, 4321, Tab, =A1+B1, Return in a new workbook, replayed into another, checked by reading 5555 off the screen; only the test's workbooks are closed, without saving. Slack: moving between sidebar tabs, replayed, and replayed again after the window is narrowed; nothing is typed or sent. A running Electron app must describe its buttons once asked.
 
 `./build.sh watch` waits for a `.selftest-request` file in the folder (its contents can name a suite) and runs the self test each time one appears, so changes can be tested without anyone at the keyboard.
@@ -109,6 +110,23 @@ Safari, Chrome, Edge, Brave, Arc and Electron apps are read through the same Acc
 
 Several displays work: a window's picture is taken from every display it's on and joined, so one sitting across two displays is seen whole.
 
+## Reading values off the screen
+
+While recording, point at a value (a total, an order number, a status) and press ⌃⌥R. That becomes a step that reads whatever is showing there on each run into `{{total}}` or a name taken from the label next to it, which you can change. Later steps can type it, and a run started from another tool gets it back under `values`. The step finds the spot by what's around it, never by the text, since the text is what changes. When an app doesn't report the text, it's read from the screen. Values read are shown after the run but never kept in the run history.
+
+## Schedules
+
+**Run on a schedule…** in a task's menu: every day, weekdays, or every few hours between two times. Values for the task's `{{variables}}` are kept with the schedule, since nobody is there to type them. A run waits while the screen is locked or another task is running, starts up to an hour late after the Mac wakes, and only once however many times went by; anything older is noted as missed in the run history. Tasks that ask for text or a password each run can't be scheduled. Turn on **Open Deja Do when you log in** so schedules survive a restart.
+
+## Updates and releases
+
+Copies sent outside the App Store update themselves with [Sparkle](https://sparkle-project.org): a daily check, an offer to install, and only updates signed with your key are accepted.
+
+1. Once: `./build.sh keys`. The private key goes into your login keychain; the public half is written into `Support/Info.plist`. Keep that key: without it, existing copies can never be updated.
+2. Each release: `./build.sh release 0.4.0`. It bumps the version and build number, signs Sparkle's helpers and the app, notarizes, signs the update, writes `appcast.xml`, and publishes a GitHub release with both files (with the `gh` tool installed and signed in; otherwise it says what to upload). Copies already out there find it at `releases/latest/download/appcast.xml`.
+
+**Send Feedback…** in the menu bar saves a zip a tester can send back: versions and setup, each task's steps as the step list shows them, recent runs and repair records. Never typed text, passwords, keys or screenshots.
+
 ## Starting tasks from other tools
 
 Turn on **Let tools on this Mac start tasks** in Settings and Deja Do listens at `http://127.0.0.1:7357`, on this Mac only. Every call except `/health` needs the token shown there (**Copy example request** copies a ready-made `curl` with it).
@@ -176,6 +194,9 @@ Keys are kept in the keychain. Only a text list of the window's elements is sent
 | `Sources/DejaDoCore/Risk.swift`, `Safety.swift` | Risky steps, typing checks, repair guard, how a run ended |
 | `Sources/DejaDoCore/Corpus.swift` | Repair records |
 | `Sources/DejaDoCore/Webhooks.swift`, `Sources/DejaDo/WebhookServer.swift` | The local web address other tools start tasks through |
+| `Sources/DejaDoCore/Schedule.swift` | When scheduled tasks are due, missed runs |
+| `Sources/DejaDo/Updates.swift` | Sparkle updates |
+| `Sources/DejaDo/StandInAI.swift` | The stand-in AI service for the self test |
 | `Sources/DejaDo/SelfTest.swift`, `WebSelfTest.swift`, `AppsSelfTest.swift`, `SlackSelfTest.swift`, `ExcelSelfTest.swift` | End to end tests on Calculator, Safari, Chrome, TextEdit, Excel and Slack |
 | `Sources/DejaDo/TestServer.swift` | The breakable web form the web test uses |
 | `Sources/DejaDoCore/Settle.swift` | Knowing when a window has finished changing |
@@ -188,7 +209,7 @@ Keys are kept in the keychain. Only a text list of the window's elements is sent
 | `Sources/DejaDo/AIRepair.swift` | The question sent to the AI |
 | `server/` | The Deja Do AI server for Dokploy |
 | `Sources/DejaDo/ScreenVision.swift` | ScreenCaptureKit capture, Vision text reading, before and after reads |
-| `Tests/DejaDoCoreTests` | 169 engine, vision, step checking and safety tests. They also run on Linux |
+| `Tests/DejaDoCoreTests` | 186 engine, vision, step checking and safety tests. They also run on Linux |
 
 Automations are saved as JSON in `~/Library/Application Support/Deja Do/Automations`. Anything recorded while the app was called Once is copied over on first launch.
 

@@ -259,6 +259,8 @@ public struct WebhookRun: Equatable {
     /// True when a step that sends, saves or deletes may have run before a stop.
     public var mayHaveChangedThings: Bool
     public var steps: [RunRecord.StepRun]
+    /// What read steps found on screen, by name.
+    public var values: [String: String] = [:]
 
     public init(id: UUID, taskID: UUID, taskName: String, status: Status = .running, started: Date = Date(),
                 finished: Date? = nil, message: String? = nil, mayHaveChangedThings: Bool = false,
@@ -268,7 +270,8 @@ public struct WebhookRun: Equatable {
     }
 
     /// Fills in the result from a finished run's record.
-    public mutating func finish(_ record: RunRecord, outcome: RunOutcome) {
+    public mutating func finish(_ record: RunRecord, outcome: RunOutcome, values: [String: String] = [:]) {
+        self.values = values
         finished = record.started.addingTimeInterval(record.duration)
         message = record.outcome
         steps = record.steps
@@ -296,6 +299,7 @@ public struct WebhookRun: Equatable {
             o["seconds"] = (finished.timeIntervalSince(started) * 10).rounded() / 10
         }
         if let message { o["message"] = message }
+        if !values.isEmpty { o["values"] = values }
         return o
     }
 

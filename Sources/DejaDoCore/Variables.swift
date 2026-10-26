@@ -34,6 +34,21 @@ public enum Variables {
         return out
     }
 
+    /// A variable name for a value read off the screen: from the label next to
+    /// it ("Total:" gives "total"), else "value", made unique among `taken`.
+    public static func suggestName(near label: String?, taken: [String]) -> String {
+        var base = (label ?? "")
+            .trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+            .lowercased()
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber }).prefix(3).joined(separator: " ")
+        if base.isEmpty || base.count > 30 || base.first?.isNumber == true { base = "value" }
+        let used = Set(taken.map(key))
+        guard used.contains(key(base)) else { return base }
+        var n = 2
+        while used.contains(key("\(base) \(n)")) { n += 1 }
+        return "\(base) \(n)"
+    }
+
     public static func key(_ name: String) -> String {
         name.lowercased().split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
@@ -46,16 +61,23 @@ public enum Variables {
 }
 
 extension Automation {
-    /// Every `{{variable}}` used in the task's typing steps, in order.
+    /// Every `{{variable}}` the task needs given to it, in order. Names a read
+    /// step fills earlier in the task come from the screen, so they aren't asked for.
     public var variableNames: [String] {
         var seen = Set<String>(), out: [String] = []
         for step in steps {
+            if case .read(_, let name) = step.kind { seen.insert(Variables.key(name)); continue }
             guard case .type(let text, let ask, let secret, _) = step.kind, !ask, !secret else { continue }
             for name in Variables.names(in: text) where seen.insert(Variables.key(name)).inserted {
                 out.append(name)
             }
         }
         return out
+    }
+
+    /// The names read steps fill, in order.
+    public var readNames: [String] {
+        steps.compactMap { if case .read(_, let n) = $0.kind { return n }; return nil }
     }
 }
 

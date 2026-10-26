@@ -1,7 +1,31 @@
 import AppKit
 import ApplicationServices
 import Security
+import UserNotifications
 import DejaDoCore
+
+/// Tells the person when a task that ran on its own, on a schedule or for
+/// another tool, didn't finish. Nobody was watching, so the status line isn't enough.
+enum Notify {
+    static let taskKey = "task"
+
+    /// Asks once, the first time it's needed. Saying no just means no banners.
+    static func ask() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+
+    static func problem(task: Automation, message: String) {
+        let e = Explainer.explain(message)
+        let content = UNMutableNotificationContent()
+        content.title = "“\(task.name)” didn't finish"
+        content.subtitle = e.headline
+        content.body = message
+        content.sound = .default
+        content.userInfo = [taskKey: task.id.uuidString]
+        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request) { _ in }
+    }
+}
 
 enum Permissions {
     static var accessibility: Bool { AXIsProcessTrusted() }

@@ -146,7 +146,7 @@ enum AppsSelfTest {
         }
         try? await Task.sleep(nanoseconds: 1_500_000_000)
         var acted = await clickPage()
-        acted = Input.type(sentence) && acted
+        acted = TestInput.type(sentence, in: textEditID) && acted
         try? await Task.sleep(nanoseconds: 900_000_000)
         key(1, command: true)                 // ⌘S
         try? await Task.sleep(nanoseconds: 1_600_000_000)
@@ -166,6 +166,7 @@ enum AppsSelfTest {
             case .key: return "key"
             case .activate: return "activate"
             case .wait: return "wait"
+            case .read: return "read"
             }
         }
         log.check(prefix + "Recorded a click, typing and two key presses", kinds.filter { $0 == "type" }.count == 1 && kinds.filter { $0 == "key" }.count == 2,
@@ -317,13 +318,13 @@ enum AppsSelfTest {
 
     static func clickPage() async -> Bool {
         guard let t = textArea(), let f = AX.frame(t) else { return false }
-        Input.click(at: CGPoint(x: f.minX + 60, y: f.minY + 30), button: .left, count: 1, modifiers: 0)
+        guard TestInput.click(CGPoint(x: f.minX + 60, y: f.minY + 30), in: textEditID) else { return false }
         try? await Task.sleep(nanoseconds: 900_000_000)
         return true
     }
 
     static func key(_ code: UInt16, command: Bool) {
-        Input.key(code, modifiers: command ? CGEventFlags.maskCommand.rawValue : 0)
+        TestInput.key(code, modifiers: command ? CGEventFlags.maskCommand.rawValue : 0, in: textEditID)
     }
 
     /// Closes only the Untitled documents this test made, telling TextEdit to
@@ -335,6 +336,14 @@ enum AppsSelfTest {
             AXUIElementSetAttributeValue(w, kAXMainAttribute as CFString, kCFBooleanTrue)
             app()?.activate(options: [.activateIgnoringOtherApps])
             try? await Task.sleep(nanoseconds: 300_000_000)
+            // A Save panel still open on the document blocks closing it: cancel it first.
+            for sheet in AX.elements(AX.raw(w, kAXChildrenAttribute)) where AX.role(sheet) == "AXSheet" {
+                let buttons = AX.collect(from: sheet, origin: nil, limit: 200) { $0 == "AXButton" }
+                if let cancel = buttons.first(where: { ["cancel", "cancelar"].contains(($0.node.label ?? "").lowercased()) }) {
+                    AX.perform(cancel.element, kAXPressAction)
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                }
+            }
             if let close = AX.element(w, kAXCloseButtonAttribute) { AX.perform(close, kAXPressAction) } else { continue }
             for _ in 0..<12 {
                 try? await Task.sleep(nanoseconds: 250_000_000)

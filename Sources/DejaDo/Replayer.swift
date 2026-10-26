@@ -42,6 +42,8 @@ final class Replayer: @unchecked Sendable {
         var confirm: (_ question: String, _ detail: String) async -> Bool = { _, _ in true }
         /// A moment where finding a step wasn't straightforward, for the repair corpus.
         var record: (RepairRecord) -> Void = { _ in }
+        /// A step changed by hand has had its check confirmed (nil) or learned again.
+        var relearned: (_ stepIndex: Int, _ expect: StepExpectation?) -> Void = { _, _ in }
     }
 
     private let lock = NSLock()
@@ -63,6 +65,11 @@ final class Replayer: @unchecked Sendable {
     private var goal: String?
     /// The closest the screen search came, for explaining why it didn't click.
     private var lastVisualMiss: String?
+    /// The values given to this run plus everything read off the screen so far.
+    private var liveValues: [String: String] = [:]
+    /// What read steps found this run, by name, for the result.
+    private(set) var readValues: [String: String] = [:]
+    private var readingNow = false
 
     /// Runs the task. Throws `ReplayStop` saying where it stopped and whether a
     /// step that sends, saves or deletes had already run.
@@ -75,6 +82,8 @@ final class Replayer: @unchecked Sendable {
         recordSink = callbacks.record
         expectedApp = nil
         goal = automation.goal
+        liveValues = values
+        readValues = [:]
         guard AXIsProcessTrusted() else {
             throw ReplayStop(message: "Deja Do needs Accessibility permission to run automations.", step: 0,
                              outcome: .stoppedBeforeChanges(atStep: 0))
@@ -202,7 +211,7 @@ final class Replayer: @unchecked Sendable {
             throw ReplayError("Something is covering “\(target.label ?? Step.friendlyRole(target.role, subrole: target.subrole))”, like a notification or a dialog, so Deja Do didn't click.")
 
         case .type(let text, let ask, let secret, let prompt):
-            var toType = Variables.fill(text, with: values)
+            var toType = Variables.fill(text, with: liveValues)
             if ask || secret {
                 let label = prompt.isEmpty ? "Text to type" : prompt
                 guard let answer = await callbacks.askText(label, secret) else {
@@ -220,7 +229,63 @@ final class Replayer: @unchecked Sendable {
 
         case .wait(let seconds):
             try await pause(seconds)
+
+        case .read(let target, let name):
+            expectedApp = (target.bundleID, target.appName)
+            let text = try await readText(target, stepIndex: i, settings: settings, callbacks: callbacks)
+            liveValues[name] = text
+            readValues[name] = text
+            // The value itself stays out of notes, which are kept in the run history.
+            note(i, "Read {{\(name)}}, \(text.count) character\(text.count == 1 ? "" : "s")")
         }
+    }
+
+    /// Finds the spot a read step points at and returns the text showing there:
+    /// what the app reports, or, when it reports nothing, what the screen shows.
+    private func readText(_ target: ElementLocator, stepIndex i: Int, settings: Settings, callbacks: Callbacks) async throws -> String {
+        readingNow = true
+        defer { readingNow = false }
+        let hit = try await locate(target, stepIndex: i, risky: false, settings: settings, callbacks: callbacks)
+        var area: CGRect?
+        switch hit {
+        case .element(let m):
+            if let t = Self.text(of: m.element) { return t }
+            area = AX.frame(m.element)
+        case .point(let p):
+            let w = max(target.frameInWindow?.width ?? 200, 40), h = max(target.frameInWindow?.height ?? 30, 16)
+            area = CGRect(x: p.x - w / 2, y: p.y - h / 2, width: w, height: h)
+        }
+        if settings.visionEnabled, let a = area, a.width >= 4, a.height >= 4,
+           let read = await ScreenVision.read(windowFrame: a.insetBy(dx: -2, dy: -2), ocr: true) {
+            let text = read.lines.sorted { ($0.frame.minY, $0.frame.minX) < ($1.frame.minY, $1.frame.minX) }
+                .map(\.text).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty { return text }
+        }
+        throw ReplayError("Found where step \(i + 1) reads from, but there was no text there.")
+    }
+
+    /// The text an element shows: its value, title or description, or else the
+    /// text inside it, a couple of levels down.
+    static func text(of el: AXUIElement) -> String? {
+        func clean(_ s: String?) -> String? {
+            let t = s?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return t.isEmpty ? nil : String(t.prefix(2000))
+        }
+        if let v = AX.raw(el, kAXValueAttribute) {
+            if CFGetTypeID(v) == CFStringGetTypeID(), let t = clean(v as? String) { return t }
+            if let n = v as? NSNumber, CFGetTypeID(v) != CFBooleanGetTypeID() { return n.stringValue }
+        }
+        if let t = clean(AX.string(el, kAXTitleAttribute)) ?? clean(AX.string(el, kAXDescriptionAttribute)) { return t }
+        var parts: [String] = []
+        func walk(_ e: AXUIElement, depth: Int) {
+            guard depth > 0, parts.count < 20 else { return }
+            for c in AX.children(e).prefix(30) {
+                if AX.role(c) == "AXStaticText", let t = clean(AX.raw(c, kAXValueAttribute) as? String) { parts.append(t) }
+                else { walk(c, depth: depth - 1) }
+            }
+        }
+        walk(el, depth: 3)
+        return clean(parts.joined(separator: " "))
     }
 
     // MARK: Safety
@@ -336,6 +401,7 @@ final class Replayer: @unchecked Sendable {
             case .proceed(let extra):
                 if result.verdict == .passed, e.hasChecks { note(i, "Screen matched") }
                 if let extra { note(i, extra) }
+                if step.recheck == true { callbacks.relearned(i, nil) }
                 return
             case .recheck(let delay):
                 try await pause(delay)
@@ -346,6 +412,12 @@ final class Replayer: @unchecked Sendable {
                 try await pause(0.08)
                 await settleFrontmost(maxWait: 2.0)
             case .stop(let reason):
+                // Changed by hand since this check was learned: what it shows now is the new normal.
+                if step.recheck == true, let before {
+                    callbacks.relearned(i, StepExpectation.derive(before: before, after: after))
+                    note(i, "Looked different since you edited the task, so it learned what this step shows now")
+                    return
+                }
                 note(i, reason)
                 throw ReplayError("Stopped at step \(i + 1): \(reason). Change what happens on a mismatch under the step if this is expected.")
             }
@@ -453,9 +525,16 @@ final class Replayer: @unchecked Sendable {
     }
 
     /// Saves a refreshed locator only if it still means the element first recorded.
-    private func learn(_ fresh: ElementLocator, from target: ElementLocator, stepIndex: Int, byAI: Bool,
-                       risky: Bool, callbacks: Callbacks, signals: FeatureVector = [:], score: Double = 0) {
-        let kept = HealGuard.repaired(fresh, from: target, risky: risky)
+    private func learn(_ found: ElementLocator, from target: ElementLocator, stepIndex: Int, byAI: Bool,
+                       risky: Bool, callbacks: Callbacks, signals: FeatureVector = [:], score: Double = 0,
+                       confirmed: Bool = false) {
+        var fresh = found
+        // A read step's spot is known by its surroundings; the text there is the value, so it's never kept.
+        if readingNow {
+            fresh.title = nil; fresh.desc = nil; fresh.value = nil; fresh.label = nil; fresh.help = nil
+            fresh.visual = nil; fresh.original = nil
+        }
+        let kept = HealGuard.repaired(fresh, from: target, risky: risky, confirmed: confirmed)
         if let kept {
             callbacks.learned(stepIndex, kept, byAI)
         } else {
@@ -505,10 +584,13 @@ final class Replayer: @unchecked Sendable {
         // Before asking the AI, see whether the screen itself shows where it went.
         if settings.visionEnabled, target.visual != nil, !target.prefersVisual,
            let point = await locateVisually(target, stepIndex: stepIndex, timeout: 1.5) {
-            if risky {
-                throw ReplayError("Step \(stepIndex + 1) sends, saves or deletes, and could only be found by how the screen looks, so Deja Do didn't click.")
+            // A step that sends, saves or deletes is never clicked on looks alone. AI may still
+            // identify it properly, and then the person is asked before it's clicked.
+            guard risky else { return .point(point) }
+            if !settings.aiEnabled {
+                throw ReplayError("Step \(stepIndex + 1) sends, saves or deletes, and could only be found by how the screen looks, so Deja Do didn't click. Turn on AI in Settings to let it look properly.")
             }
-            return .point(point)
+            note(stepIndex, "Only found by how it looks, which isn't enough for this step, so asked AI")
         }
 
         let what = Step(kind: .click(target: target, button: .left, count: 1, modifiers: 0)).summary
@@ -560,8 +642,9 @@ final class Replayer: @unchecked Sendable {
 
         let el = outcome.element(for: chosen)
         if let updated = AX.makeLocator(for: el, pid: AX.pid(el), clickPoint: nil) {
+            // A risky step only gets here after the person said yes to this pick.
             learn(updated, from: target, stepIndex: stepIndex, byAI: true, risky: risky, callbacks: callbacks,
-                  signals: chosen.features, score: chosen.score)
+                  signals: chosen.features, score: chosen.score, confirmed: risky)
         }
         note(stepIndex, "AI picked \(picked): \(choice.reason ?? "")")
         return .element(ElementFinder.Match(element: el, windowFrame: outcome.root.windowFrame))

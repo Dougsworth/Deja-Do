@@ -180,6 +180,8 @@ public struct RunRecord: Codable, Equatable, Identifiable {
     public var row: Int?
     public var rows: Int?
     public var steps: [StepRun]
+    /// What started the run when it wasn't the person: "schedule" or "another tool".
+    public var trigger: String?
 
     public struct StepRun: Codable, Equatable {
         public var index: Int
@@ -199,6 +201,14 @@ public struct RunRecord: Codable, Equatable, Identifiable {
                 steps: [StepRun]) {
         self.started = started; self.duration = duration; self.outcome = outcome; self.succeeded = succeeded
         self.row = row; self.rows = rows; self.steps = steps
+    }
+}
+
+extension RunRecord {
+    public func with(trigger: String?) -> RunRecord {
+        var r = self
+        r.trigger = trigger
+        return r
     }
 }
 
@@ -304,6 +314,10 @@ public enum SkillExport {
         """
         if !vars.isEmpty {
             md += "\n## Inputs\n\n" + vars.map { "- `\($0)`" }.joined(separator: "\n") + "\n"
+        }
+        if !a.readNames.isEmpty {
+            md += "\n## What it reads back\n\nThe task reads these off the screen. Started through Deja Do's local web address (`POST /run` with `\"wait\": true`), they come back under `values`:\n\n"
+                + a.readNames.map { "- `\($0)`" }.joined(separator: "\n") + "\n"
         }
         md += "\n## Steps, if you do it by hand\n\n"
         var n = 0

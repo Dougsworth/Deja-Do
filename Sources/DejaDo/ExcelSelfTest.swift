@@ -112,7 +112,7 @@ enum ExcelSelfTest {
         ElementFinder.runningApp(excelID)?.activate(options: [.activateIgnoringOtherApps])
         try? await Task.sleep(nanoseconds: 600_000_000)
         let before = Set(titles())
-        Input.key(45, modifiers: CGEventFlags.maskCommand.rawValue)   // ⌘N
+        TestInput.key(45, modifiers: CGEventFlags.maskCommand.rawValue, in: excelID)   // ⌘N
         for _ in 0..<40 {
             try? await Task.sleep(nanoseconds: 400_000_000)
             guard let w = frontWindow(), let t = AX.string(w, kAXTitleAttribute), !before.contains(t),
@@ -124,13 +124,13 @@ enum ExcelSelfTest {
     }
 
     static func type(_ text: String) -> Bool {
-        let ok = Input.type(text)
+        let ok = TestInput.type(text, in: excelID)
         usleep(700_000)
         return ok
     }
 
     static func key(_ code: UInt16) {
-        Input.key(code, modifiers: 0)
+        TestInput.key(code, in: excelID)
         usleep(700_000)
     }
 

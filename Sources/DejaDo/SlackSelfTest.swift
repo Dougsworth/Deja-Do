@@ -130,7 +130,7 @@ enum SlackSelfTest {
     @discardableResult
     static func press(_ label: String) async -> Bool {
         guard let f = controls().first(where: { ($0.node.label ?? "") == label }), let r = f.node.frame else { return false }
-        Input.click(at: CGPoint(x: r.midX, y: r.midY), button: .left, count: 1, modifiers: 0)
+        guard TestInput.click(CGPoint(x: r.midX, y: r.midY), in: slackID) else { return false }
         try? await Task.sleep(nanoseconds: 1_400_000_000)
         return true
     }

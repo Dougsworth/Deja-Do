@@ -89,8 +89,11 @@ enum WebSelfTest {
             }
             opened.add()
             log.check("\(browserName) shows the test page", true)
-            _ = await replays(log, server: server, vision: vision, opened: opened)
-            if id == safariID { _ = await spanish(log, server: server, vision: vision, opened: opened) }
+            let recorded = await replays(log, server: server, vision: vision, opened: opened)
+            if id == safariID {
+                if let task = recorded.task { await aiRepair(log, task: task, server: server, vision: vision, opened: opened) }
+                _ = await spanish(log, server: server, vision: vision, opened: opened)
+            }
             await closeTabs(opened.value)
         }
         current.browserID = safariID
@@ -154,7 +157,7 @@ enum WebSelfTest {
         func add() { value += 1 }
     }
 
-    static func replays(_ log: SelfTest.Log, server: TestServer, vision: Bool, opened: Counter) async -> Bool {
+    static func replays(_ log: SelfTest.Log, server: TestServer, vision: Bool, opened: Counter) async -> (passed: Bool, task: Automation?) {
         let failuresBefore = log.failures
 
         // 1. Record: Name, Email, Submit, with real clicks and typing.
@@ -197,7 +200,7 @@ enum WebSelfTest {
         }
         guard acted, recorded.submits == 1, clicks.count == 3 else {
             log.line("      recording didn't come out right, skipping the replays")
-            return false
+            return (false, nil)
         }
 
         // 2. Replay against each breakage.
@@ -242,7 +245,103 @@ enum WebSelfTest {
             if s.submits > 1 { log.line("      SUBMITTED TWICE, this must never happen") }
             log.line("      notes: \(notes)")
         }
-        return log.failures == failuresBefore
+        return (log.failures == failuresBefore, task)
+    }
+
+    /// AI repair, end to end, against a stand-in AI service (see StandInAI).
+    /// The button is relabelled "Send", moved, and given a new id, so nothing
+    /// the recording knows finds it. AI has to pick it; because Submit sends,
+    /// the person must be asked first; and once fixed, the next run must not
+    /// need AI at all.
+    static func aiRepair(_ log: SelfTest.Log, task: Automation, server: TestServer, vision: Bool, opened: Counter) async {
+        log.line("AI repair")
+        let ai = StandInAI()
+        guard ai.start() else { log.check("Stand-in AI service starts", false); return }
+        defer { ai.stop() }
+        let config = AIConfig(provider: .ollama, model: "stand-in", baseURL: ai.baseURL)
+        let breaks: [TestServer.Break] = [.relabel, .move, .idswap]
+        guard let submit = task.steps.lastIndex(where: { if case .click = $0.kind { return true }; return false }) else { return }
+
+        final class Box: @unchecked Sendable {
+            var asked: [String] = []
+            var learned: ElementLocator?
+            var byAI = false
+        }
+
+        // 1. AI finds it, the person is asked, it's sent once, and the fix is kept.
+        server.reset(); ai.reset()
+        guard await open(server.url(breaks: breaks), waitForButton: true) else { log.check("AI: page loads", false); return }
+        opened.add()
+        let box = Box()
+        let first = await SelfTest.runTaskReading(task, vision: vision, ai: config,
+            confirm: { q, _ in box.asked.append(q); return true },
+            learned: { i, l, byAI in if i == submit { box.learned = l; box.byAI = byAI } })
+        var s = server.state
+        log.check("AI: finds the relabelled, moved button and it's sent once", first.error == nil && s.submits == 1 && s.feedback == 0,
+                  "submits \(s.submits), AI asked \(ai.calls) time\(ai.calls == 1 ? "" : "s")" + (first.error.map { " · stopped: \($0)" } ?? ""))
+        log.check("AI: the question names what was recorded", ai.lastPrompt?.contains("label=\"Submit\"") == true)
+        log.check("AI: asks you before clicking a step that sends", box.asked.contains { $0.contains("Send") }, box.asked.joined(separator: " / "))
+        log.check("AI: keeps the fix", box.learned?.label == "Send" && box.byAI, box.learned?.label ?? "nothing learned")
+        log.line("      notes: \(first.notes)")
+
+        // 2. With the fix applied, the same broken page needs no AI.
+        var fixed = task
+        if let l = box.learned, case .click(_, let b, let c, let m) = fixed.steps[submit].kind {
+            fixed.steps[submit].kind = .click(target: l, button: b, count: c, modifiers: m)
+        }
+        server.reset(); ai.reset()
+        if await open(server.url(breaks: breaks), waitForButton: true) {
+            opened.add()
+            let second = await SelfTest.runTaskReading(fixed, vision: vision, ai: config)
+            s = server.state
+            log.check("AI: next run needs no AI", second.error == nil && s.submits == 1 && ai.calls == 0,
+                      "submits \(s.submits), AI asked \(ai.calls) times" + (second.error.map { " · stopped: \($0)" } ?? ""))
+        }
+
+        // 3. Saying no stops the run with nothing sent.
+        server.reset(); ai.reset()
+        if await open(server.url(breaks: breaks), waitForButton: true) {
+            opened.add()
+            let declined = await SelfTest.runTaskReading(task, vision: vision, ai: config, confirm: { _, _ in false })
+            s = server.state
+            log.check("AI: saying no to its pick stops with nothing sent", declined.error != nil && s.submits == 0,
+                      declined.error ?? "it finished")
+        }
+
+        // 4. When AI sees nothing that fits, the run stops rather than guessing.
+        server.reset(); ai.reset(); ai.mode = .refuses
+        if await open(server.url(breaks: breaks), waitForButton: true) {
+            opened.add()
+            let refused = await SelfTest.runTaskReading(task, vision: vision, ai: config)
+            s = server.state
+            log.check("AI: when it finds nothing, the run stops with nothing sent", refused.error != nil && s.submits == 0,
+                      refused.error ?? "it finished")
+        }
+        ai.mode = .sensible
+
+        // 5. The AI service set up in Settings, if any. Reported, not counted: it costs a request and needs the network.
+        if let real = configuredAI() {
+            server.reset()
+            if await open(server.url(breaks: breaks), waitForButton: true) {
+                opened.add()
+                let r = await SelfTest.runTaskReading(task, vision: vision, ai: real)
+                s = server.state
+                log.check("AI: your \(real.provider.name) (\(real.model)) finds it too", r.error == nil && s.submits == 1,
+                          "submits \(s.submits)" + (r.error.map { " · stopped: \($0)" } ?? ""), counted: false)
+            }
+        } else {
+            log.check("AI: your own AI service", true, "none set up in Settings, skipped", counted: false)
+        }
+    }
+
+    /// The AI service chosen in Settings, when it's ready to use.
+    static func configuredAI() -> AIConfig? {
+        let d = UserDefaults.standard
+        guard let raw = d.string(forKey: "aiProvider"), let p = AIProvider(rawValue: raw), p != .dejaDo else { return nil }
+        let key = p.keychainAccount.flatMap { Keychain.get($0) } ?? ""
+        let base: String? = p == .ollama ? (d.string(forKey: "ollamaURL") ?? AIRequest.ollamaDefault) : nil
+        let c = AIConfig(provider: p, model: AppModel.savedModel(for: p), key: key, baseURL: base)
+        return c.problem == nil ? c : nil
     }
 
     // MARK: The browser
@@ -315,20 +414,20 @@ enum WebSelfTest {
 
     static func click(field: String) async -> Bool {
         guard let f = Self.field(field), let frame = f.node.frame else { return false }
-        Input.click(at: CGPoint(x: frame.midX, y: frame.midY), button: .left, count: 1, modifiers: 0)
+        guard TestInput.click(CGPoint(x: frame.midX, y: frame.midY), in: browserID) else { return false }
         try? await Task.sleep(nanoseconds: 900_000_000)
         return true
     }
 
     static func click(button: String) async -> Bool {
         guard let f = find(role: "AXButton", labelled: [button]), let frame = f.node.frame else { return false }
-        Input.click(at: CGPoint(x: frame.midX, y: frame.midY), button: .left, count: 1, modifiers: 0)
+        guard TestInput.click(CGPoint(x: frame.midX, y: frame.midY), in: browserID) else { return false }
         try? await Task.sleep(nanoseconds: 900_000_000)
         return true
     }
 
     static func type(_ text: String) -> Bool {
-        let ok = Input.type(text)
+        let ok = TestInput.type(text, in: browserID)
         usleep(900_000)
         return ok
     }
@@ -352,7 +451,7 @@ enum WebSelfTest {
             guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == browserID,
                   let front = AX.element(el, kAXFocusedWindowAttribute),
                   AX.string(front, kAXTitleAttribute)?.contains(pageTitle) == true else { break }
-            Input.key(13, modifiers: CGEventFlags.maskCommand.rawValue)   // ⌘W
+            TestInput.key(13, modifiers: CGEventFlags.maskCommand.rawValue, in: browserID)   // ⌘W
             try? await Task.sleep(nanoseconds: 350_000_000)
         }
     }

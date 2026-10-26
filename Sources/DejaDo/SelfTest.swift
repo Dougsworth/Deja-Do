@@ -56,6 +56,8 @@ enum SelfTest {
         /// - Parameter counted: false for stretch goals, reported but not failing the run.
         func check(_ name: String, _ ok: Bool, _ detail: String = "", counted: Bool = true) {
             if !ok && counted { failures += 1 }
+            let held = SelfTest.Guard.shared.take()
+            if !held.isEmpty { line("      held back: " + held.prefix(3).joined(separator: "; ")) }
             let tag = ok ? "PASS" : (counted ? "FAIL" : "MISS")
             line("\(tag)  \(name)\(detail.isEmpty ? "" : " · " + detail)")
         }
@@ -68,6 +70,16 @@ enum SelfTest {
         log.check("Accessibility allowed", AXIsProcessTrusted())
         log.check("Input Monitoring allowed", CGPreflightListenEventAccess())
         guard AXIsProcessTrusted(), CGPreflightListenEventAccess() else { return false }
+        // Never drive the Mac while someone is using it.
+        if idleSeconds < 20 {
+            log.check("Nobody is using the Mac", false,
+                      String(format: "the mouse or keyboard was used %.0f seconds ago; the test only starts after 20 quiet seconds", idleSeconds))
+            return false
+        }
+        if AppModel.screenLocked {
+            log.check("The screen is unlocked", false)
+            return false
+        }
         let vision = ScreenVision.hasPermission
         log.line("Screen Recording \(vision ? "allowed, vision checks will run" : "not allowed, vision checks skipped")")
 
@@ -129,6 +141,18 @@ enum SelfTest {
 
         // 2. Replay as recorded.
         await replay(task, name: "Replay", expect: "15", vision: vision, log: log)
+
+        // 2b. Edited by hand: the 8 renamed to 9. The click finds 9, and the
+        // = step, which expected 15, learns 16 instead of stopping the run.
+        var edited = task
+        if let i = edited.steps.lastIndex(where: { $0.targetName == "8" }) {
+            let old = edited.steps[i].targetName
+            edited.steps[i] = edited.steps[i].renamingTarget(to: "9")
+            edited.noteEdit(at: i, replacing: old, with: "9")
+        }
+        log.check("Renaming a click from 8 to 9 changes the step", edited.steps.contains { $0.summary.contains("“9”") },
+                  edited.steps.map(\.summary).joined(separator: " | "))
+        await replay(edited, name: "Replay after renaming 8 to 9", expect: "16", vision: vision, log: log)
 
         // 3. Replay after the layout changes: buttons move and resize.
         await setMode(basic: false)
@@ -239,7 +263,10 @@ enum SelfTest {
             await otherDisplay(task, screenOnly: screenOnly, log: log)
         }
 
-        await webhook(task, vision: vision, log: log)
+        let read = await readDisplay(vision: vision, log: log)
+        var withRead = task
+        if let read { withRead.steps.append(read) }
+        await webhook(withRead, vision: vision, log: log)
         await menuChoice(vision: vision, log: log)
         await calculatorInSpanish(log, vision: vision)
         return log.failures == 0
@@ -288,6 +315,68 @@ enum SelfTest {
         NSRunningApplication.runningApplications(withBundleIdentifier: calculatorID).first?.terminate()
     }
 
+    /// Keeping what the display shows: recorded by pointing at it and pressing
+    /// ⌃⌥R, then replayed after two different sums. It must read what's there
+    /// each time, not what was there when recorded.
+    static func readDisplay(vision: Bool, log: Log) async -> Step? {
+        await setMode(basic: true)
+        await press(clearNames)
+        for keys in [sevenNames, plusNames, eightNames, equalsNames] { await press(keys) }
+        guard let display = displayElement(), let f = display.node.frame else {
+            log.check("Read: found the display to point at", false, "display: \(displayText())")
+            return nil
+        }
+        let recorder = await MainActor.run { () -> Recorder in
+            let r = Recorder()
+            r.visionEnabled = vision
+            r.checkSteps = true
+            _ = r.start()
+            return r
+        }
+        try? await Task.sleep(nanoseconds: 1_200_000_000)
+        let point = CGPoint(x: f.midX, y: f.midY)
+        CGEvent(mouseEventSource: Input.source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)?
+            .post(tap: .cghidEventTap)
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        TestInput.key(15, modifiers: CGEventFlags.maskControl.rawValue | CGEventFlags.maskAlternate.rawValue, in: calculatorID)   // ⌃⌥R
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        let steps: [Step] = await withCheckedContinuation { cont in
+            DispatchQueue.main.async { recorder.finish { cont.resume(returning: $0) } }
+        }
+        let reads = steps.filter { if case .read = $0.kind { return true }; return false }
+        let keys = steps.filter { if case .key = $0.kind { return true }; return false }
+        log.check("Read: ⌃⌥R records a read step, not a key press", reads.count == 1 && keys.isEmpty,
+                  steps.map(\.summary).joined(separator: " | "))
+        guard let read = reads.first, case .read(let target, let name) = read.kind else { return nil }
+        log.check("Read: the step doesn't remember the value itself", target.label == nil && target.value == nil && target.title == nil,
+                  "name {{\(name)}}")
+        let task = Automation(name: "Self test read", steps: [read])
+
+        let first = await runTaskReading(task, vision: vision)
+        log.check("Read: reads 15 after 7 + 8", first.error == nil && digits(first.read[name]) == "15",
+                  first.error ?? "read “\(first.read[name] ?? "nothing")”")
+        await press(clearNames)
+        for keys in [["9", "nine", "nueve"], ["×", "multiply", "times", "*", "multiplicar"], ["9", "nine", "nueve"], equalsNames] {
+            await press(keys)
+        }
+        let second = await runTaskReading(task, vision: vision)
+        log.check("Read: reads 81 after 9 × 9, what's showing now", second.error == nil && digits(second.read[name]) == "81",
+                  second.error ?? "read “\(second.read[name] ?? "nothing")”")
+        return read
+    }
+
+    static func digits(_ s: String?) -> String {
+        (s ?? "").filter { $0.isNumber || $0 == "." || $0 == "-" }
+    }
+
+    /// The display: the text element showing the current number.
+    static func displayElement() -> AX.Found? {
+        guard let w = window() else { return nil }
+        return AX.collect(from: w, origin: nil, limit: 800) { $0 == "AXStaticText" }
+            .filter { !digits($0.node.value ?? $0.node.label).isEmpty }
+            .max { ($0.node.frame?.height ?? 0) < ($1.node.frame?.height ?? 0) }
+    }
+
     /// Choosing View › Scientific from the menu bar. A menu closes the moment
     /// an item is clicked, so what was clicked has to be read at that instant.
     static func menuChoice(vision: Bool, log: Log) async {
@@ -334,7 +423,7 @@ enum SelfTest {
         guard let bar = menuBar(),
               let item = AX.children(bar).first(where: { AX.string($0, kAXTitleAttribute) == title }),
               let f = AX.frame(item) else { return false }
-        Input.click(at: CGPoint(x: f.midX, y: f.midY), button: .left, count: 1, modifiers: 0)
+        guard TestInput.click(CGPoint(x: f.midX, y: f.midY), in: calculatorID) else { return false }
         try? await Task.sleep(nanoseconds: 900_000_000)
         return true
     }
@@ -343,7 +432,7 @@ enum SelfTest {
         guard let bar = menuBar() else { return false }
         let items = AX.collect(from: bar, origin: nil, limit: 800) { $0 == "AXMenuItem" }
         guard let item = items.first(where: { $0.node.title == title }), let f = item.node.frame, f.width > 0 else { return false }
-        Input.click(at: CGPoint(x: f.midX, y: f.midY), button: .left, count: 1, modifiers: 0)
+        guard TestInput.click(CGPoint(x: f.midX, y: f.midY), in: calculatorID) else { return false }
         try? await Task.sleep(nanoseconds: 900_000_000)
         return true
     }
@@ -372,12 +461,12 @@ enum SelfTest {
                 busy.value = true
                 Task.detached {
                     let started = Date()
-                    let (error, _) = await runTask(task, vision: vision)
+                    let (error, _, read) = await runTaskReading(task, vision: vision)
                     let record = RunRecord(started: started, duration: Date().timeIntervalSince(started),
                                            outcome: error ?? "Done.", succeeded: error == nil,
                                            steps: task.steps.enumerated().map { .init(index: $0.offset, summary: $0.element.safeSummary, note: nil, ran: true) })
                     let outcome: RunOutcome = error == nil ? .finished : .stoppedBeforeChanges(atStep: 0)
-                    DispatchQueue.main.async { busy.value = false; done(record, outcome) }
+                    DispatchQueue.main.async { busy.value = false; done(record, outcome, read) }
                 }
                 return true
             })
@@ -405,6 +494,11 @@ enum SelfTest {
         for _ in 0..<10 where !displayShows("15") { try? await Task.sleep(nanoseconds: 200_000_000) }
         log.check("A request with the token runs the task and waits for the result", code == 200 && status == "succeeded" && displayShows("15"),
                   "status \(code), run \(status ?? "none"), display \(displayText())")
+        if !task.readNames.isEmpty {
+            let values = reply["values"] as? [String: String] ?? [:]
+            log.check("…and gets back what the task read off the screen", values.values.contains { digits($0) == "15" },
+                      "values \(values)")
+        }
         let busyCode = await second.value
         log.check("A second request while it runs is told Deja Do is busy", busyCode == 409, "status \(busyCode)")
         if let id = reply["runId"] as? String {
@@ -490,6 +584,10 @@ enum SelfTest {
             CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: p, mouseButton: .left)?
                 .post(tap: .cghidEventTap)
         }
+        guard TestInput.front(calculatorID), let hit = AX.element(at: start), AX.pid(hit) == TestInput.pid(calculatorID) else {
+            Guard.shared.blocked("dragging Calculator's title bar, something else was there")
+            return
+        }
         post(.mouseMoved, start)
         usleep(80_000)
         post(.leftMouseDown, start)
@@ -513,22 +611,33 @@ enum SelfTest {
     }
 
     static func runTask(_ a: Automation, vision: Bool, replayer: Replayer = Replayer()) async -> (error: String?, notes: String) {
+        let r = await runTaskReading(a, vision: vision, replayer: replayer)
+        return (r.error, r.notes)
+    }
+
+    /// Runs the task with the given settings and returns what it read off the screen too.
+    static func runTaskReading(_ a: Automation, vision: Bool, replayer: Replayer = Replayer(), ai: AIConfig? = nil,
+                               values: [String: String] = [:],
+                               confirm: @escaping (String, String) async -> Bool = { _, _ in true },
+                               learned: @escaping (Int, ElementLocator, Bool) -> Void = { _, _, _ in })
+        async -> (error: String?, notes: String, read: [String: String]) {
         let collected = NotesBox()
-        let settings = Replayer.Settings(ai: AIConfig(provider: .anthropic, model: "", key: ""), aiEnabled: false,
+        let settings = Replayer.Settings(ai: ai ?? AIConfig(provider: .anthropic, model: "", key: ""), aiEnabled: ai != nil,
                                          visionEnabled: vision, checkSteps: true)
-        let callbacks = Replayer.Callbacks(
+        var callbacks = Replayer.Callbacks(
             progress: { _ in },
             askText: { _, _ in nil },
-            learned: { _, _, _ in },
+            learned: learned,
             note: { i, text in collected.set(i, text) },
             tuned: { _, _ in })
+        callbacks.confirm = confirm
         do {
-            try await replayer.run(a, settings: settings, callbacks: callbacks)
-            return (nil, collected.summary)
+            try await replayer.run(a, settings: settings, callbacks: callbacks, values: values)
+            return (nil, collected.summary, replayer.readValues)
         } catch let stop as ReplayStop {
-            return ("\(stop.message) \(stop.outcome.advice)", collected.summary)
+            return ("\(stop.message) \(stop.outcome.advice)", collected.summary, replayer.readValues)
         } catch {
-            return (error.localizedDescription, collected.summary)
+            return (error.localizedDescription, collected.summary, replayer.readValues)
         }
     }
 
@@ -571,7 +680,7 @@ enum SelfTest {
         NSRunningApplication.runningApplications(withBundleIdentifier: calculatorID).first?
             .activate(options: [.activateIgnoringOtherApps])
         try? await Task.sleep(nanoseconds: 300_000_000)
-        Input.key(basic ? 18 : 19, modifiers: CGEventFlags.maskCommand.rawValue)
+        TestInput.key(basic ? 18 : 19, modifiers: CGEventFlags.maskCommand.rawValue, in: calculatorID)
         try? await Task.sleep(nanoseconds: 900_000_000)
     }
 
@@ -587,7 +696,7 @@ enum SelfTest {
             [f.node.label, f.node.title, f.node.desc].contains { $0.map { wanted.contains(key($0)) } ?? false }
         }
         guard let frame = hit?.node.frame else { return false }
-        Input.click(at: CGPoint(x: frame.midX, y: frame.midY), button: .left, count: 1, modifiers: 0)
+        guard TestInput.click(CGPoint(x: frame.midX, y: frame.midY), in: calculatorID) else { return false }
         // About the pace a person clicks at, so the recorder sees each result settle.
         try? await Task.sleep(nanoseconds: 1_000_000_000)
         return true

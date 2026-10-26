@@ -1,11 +1,34 @@
 import SwiftUI
 import AppKit
+import UserNotifications
 @preconcurrency import DejaDoCore
 
 /// Opens .dejado files double-clicked in Finder or dropped on the app.
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
-        if SelfTest.requested { SelfTest.start() }
+        if SelfTest.requested { SelfTest.start() } else { _ = Updates.shared }
+        UNUserNotificationCenter.current().delegate = self
+    }
+
+    /// Clicking a "didn't finish" banner opens Deja Do on that task.
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        let key = response.notification.request.content.userInfo[Notify.taskKey] as? String
+        DispatchQueue.main.async {
+            let model = AppModel.shared
+            if let key, let id = UUID(uuidString: key), model.automations.contains(where: { $0.id == id }) {
+                model.selection = id
+            }
+            model.wantsWindow = true
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        completionHandler()
+    }
+
+    /// Show banners even while Deja Do is in front.
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .sound])
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -51,7 +74,13 @@ struct MenuBarLabel: View {
     private static var openedAtLaunch = false
 
     var body: some View {
-        Image(systemName: icon)
+        icon
+            .onChange(of: model.wantsWindow) { wants in
+                guard wants else { return }
+                model.wantsWindow = false
+                openWindow(id: "main")
+                NSApp.activate(ignoringOtherApps: true)
+            }
             .task {
                 guard !Self.openedAtLaunch else { return }
                 Self.openedAtLaunch = true
@@ -64,11 +93,24 @@ struct MenuBarLabel: View {
             }
     }
 
-    private var icon: String {
-        if model.isRecording { return "record.circle" }
-        if model.runningID != nil { return "play.circle" }
-        return "repeat"
+    /// The mark when idle; the state's own symbol while recording or running.
+    @ViewBuilder private var icon: some View {
+        if model.isRecording {
+            Image(systemName: "record.circle")
+        } else if model.runningID != nil {
+            Image(systemName: "play.circle")
+        } else if let mark = Self.mark {
+            Image(nsImage: mark)
+        } else {
+            Image(systemName: "repeat")
+        }
     }
+
+    private static let mark: NSImage? = {
+        guard let image = NSImage(named: "MenuBarIcon") else { return nil }
+        image.isTemplate = true
+        return image
+    }()
 }
 
 struct MenuContent: View {
@@ -85,7 +127,7 @@ struct MenuContent: View {
             .keyboardShortcut("s")
             Button("Discard Recording") { model.discardRecording() }
         } else if model.runningID != nil {
-            Text("Running step \(model.runningStep + 1) · press Esc to stop")
+            Text("Running · step \(model.runningStep + 1) · press Esc to stop")
             Button("Stop") { model.stopRun() }
         } else {
             Button("Record a Task") {
@@ -106,10 +148,20 @@ struct MenuContent: View {
             Divider()
             Text(status)
         }
+        if let r = model.lastResult, r.ending == .failed, model.runningID == nil {
+            Button("Why “\(r.name)” Stopped…") {
+                model.selection = r.automationID
+                openMain()
+            }
+        }
 
         Divider()
         Button("Open Deja Do") { openMain() }
             .keyboardShortcut("o")
+        if Updates.shared.isAvailable {
+            Button("Check for Updates…") { Updates.shared.check() }
+        }
+        Button("Send Feedback…") { model.exportFeedback() }
         Button("Quit Deja Do") { NSApp.terminate(nil) }
             .keyboardShortcut("q")
     }
