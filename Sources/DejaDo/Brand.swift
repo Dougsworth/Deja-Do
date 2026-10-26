@@ -12,26 +12,39 @@ enum Brand {
         })
     }
 
-    // Foundations
-    /// Logo, headings, primary text.
-    static let ink = dynamic(0x17191C, 0xECEDEE)
-    /// The main background.
-    static let canvas = dynamic(0xF7F7F4, 0x141618)
-    /// Raised surfaces: sheets, fields.
-    static let surface = dynamic(0xFFFFFF, 0x1C1F23)
-    /// Hairlines, selected rows, secondary surfaces.
-    static let mist = dynamic(0xE9EDF3, 0x2A2F36)
-    /// Secondary text.
-    static let slate = dynamic(0x6B717A, 0x9AA1AA)
-    /// Brand and primary actions. Lighter on dark so it keeps its contrast.
-    static let cobalt = dynamic(0x3459C8, 0x7B97F2)
-    /// Text on a cobalt button: white on light, deep navy on dark, for 4.5:1 either way.
-    static let onCobalt = dynamic(0xFFFFFF, 0x0D1530)
+    // The three signature colours are Deja Blue, Obsidian and Cloud White.
+    // Everything else supports them. Light value first, dark second.
 
-    // States, separate from the brand colour
-    static let forest = dynamic(0x237A57, 0x4FB487)
-    static let amber = dynamic(0x965C0C, 0xE3A84A)
-    static let red = dynamic(0xC2362C, 0xF0695E)
+    /// Text: Obsidian on light, Cloud White on dark.
+    static let ink = dynamic(0x17191C, 0xF8F9FA)
+    /// The main background: Cloud White.
+    static let canvas = dynamic(0xF8F9FA, 0x121417)
+    /// The sidebar.
+    static let sidebar = dynamic(0xF1F3F6, 0x1A1D22)
+    /// Cards, panels and sheets: Pure White.
+    static let surface = dynamic(0xFFFFFF, 0x22262C)
+    /// Borders and dividers: Mist.
+    static let mist = dynamic(0xE9EDF3, 0x343A43)
+    /// Selected navigation and subtle highlights: Soft Blue.
+    static let selected = dynamic(0xEEF2FF, 0x28365B)
+    /// Secondary text and the Idle state: Slate.
+    static let slate = dynamic(0x667085, 0xA4ACB9)
+    /// Deja Blue: the logo, primary buttons, active states, the Running state.
+    static let cobalt = dynamic(0x3659C9, 0x6D8CF0)
+    /// Deep Blue: a pressed or hovered primary button.
+    static let deepBlue = dynamic(0x2846A5, 0x7895F2)
+    /// Text on Deja Blue: white on light (6.1:1); Obsidian on dark, where white would only reach 3.2:1.
+    static let onCobalt = dynamic(0xFFFFFF, 0x17191C)
+
+    // Functional colours: they mean a state, never the brand. In light mode
+    // they pass 3:1 for symbols but not 4.5:1 for small text, so a state's
+    // word is set in ink and its symbol carries the colour.
+    /// Signal Red: Recording, and Failed.
+    static let red = dynamic(0xD64545, 0xEF6B63)
+    /// Success Green: Completed.
+    static let forest = dynamic(0x23845B, 0x4FB487)
+    /// Amber: Needs attention.
+    static let amber = dynamic(0xC47B22, 0xE3A84A)
 }
 
 extension NSColor {

@@ -50,7 +50,7 @@ struct PrimaryButtonStyle: ButtonStyle {
             .padding(.vertical, compact ? 5 : 7)
             .background(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(Brand.cobalt.opacity(configuration.isPressed ? 0.8 : 1))
+                    .fill(configuration.isPressed ? Brand.deepBlue : Brand.cobalt)
             )
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .opacity(isEnabled ? 1 : 0.45)
@@ -103,7 +103,7 @@ struct MainView: View {
         HStack(spacing: 0) {
             Sidebar(showSettings: $showSettings)
                 .frame(width: Metrics.sidebarWidth)
-                .background(VisualEffect(material: .sidebar))
+                .background(Brand.sidebar)
             Divider()
             VStack(spacing: 0) {
                 Group {
@@ -291,7 +291,7 @@ struct SidebarRow: View {
             .padding(.vertical, 7)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color.primary.opacity(selected ? 0.08 : (hovering ? 0.04 : 0)))
+                    .fill(selected ? AnyShapeStyle(Brand.selected) : AnyShapeStyle(Color.primary.opacity(hovering ? 0.04 : 0)))
             )
             .contentShape(Rectangle())
         }
@@ -386,7 +386,7 @@ struct StatusBar: View {
                     .foregroundStyle(state.color)
                 Text(state.word)
                     .font(.ui(11, .semibold))
-                    .foregroundStyle(state.color)
+                    .foregroundStyle(Brand.ink)
                 if !detail.isEmpty {
                     Text(detail)
                         .font(.ui(11))
