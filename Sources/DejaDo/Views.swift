@@ -136,6 +136,11 @@ struct MainView: View {
         .sheet(isPresented: $showSettings) {
             SettingsView().environmentObject(model)
         }
+        .onChange(of: model.wantsSettings) { wants in
+            guard wants else { return }
+            model.wantsSettings = false
+            showSettings = true
+        }
         .sheet(item: $model.pendingRun) { pending in
             VariablesSheet(pending: pending).environmentObject(model)
         }
@@ -604,7 +609,7 @@ struct AutomationView: View {
             // meant for text fields inside its rows, so a step's name or text
             // couldn't be clicked into and changed.
             if let reason = failureReason {
-                StopReason(reason: reason, stoppedAt: stoppedStep) { model.historyFor = automation.id }
+                StopReason(reason: reason, stoppedAt: stoppedStep, task: automation.id)
                 Divider()
             }
 
@@ -830,13 +835,22 @@ struct StatusDetails: View {
             if let status = model.status, status != model.lastResult?.message, !status.isEmpty {
                 section("Latest", status)
             }
-            section("What you can do", advice)
+            let e = explanation
+            if !e.why.isEmpty { section("What it means", e.headline + ". " + e.why) }
+            if !e.steps.isEmpty { VStack(alignment: .leading, spacing: 3) {
+                Text("What you can do").font(.ui(11, .semibold)).foregroundStyle(.secondary)
+                ForEach(Array(e.steps.enumerated()), id: \.offset) { i, step in
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text("\(i + 1)").font(.ui(11).monospacedDigit()).foregroundStyle(.tertiary)
+                        Text(step).font(.ui(12)).foregroundStyle(Brand.ink)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            } }
             Divider()
             HStack(spacing: 16) {
-                if let s = stopped {
-                    Button("Run history") { model.historyFor = s.task.id }
-                        .buttonStyle(.plain).foregroundStyle(Brand.cobalt)
-                }
+                FixButtons(actions: e.actions, task: taskID)
+                Spacer(minLength: 0)
                 Button("Copy details") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(plainText, forType: .string)
@@ -858,26 +872,14 @@ struct StatusDetails: View {
         }
     }
 
-    /// Plain next steps for the usual reasons a run stops.
-    private var advice: String {
-        let text = ((model.lastResult?.message ?? "") + " " + (model.status ?? "")).lowercased()
-        if text.contains("permission") || text.contains("accessibility") || text.contains("input monitoring") {
-            return "Open System Settings › Privacy & Security and turn Deja Do on under Accessibility, Input Monitoring and Screen Recording. After a new build you may need to turn it off and on again."
-        }
-        if text.contains("couldn't find") || text.contains("not found") || text.contains("couldn't see") {
-            return "Open the app where the task expects it, with the same chat, page or window showing, and run again. If a popup or banner covers it, click “Something in the way?” and close it once so Deja Do learns to."
-        }
-        if text.contains("expected") {
-            return "The step worked but the screen looked different afterwards. If the new result is fine, open the step and set “If it doesn't match” to “Keep going”."
-        }
-        if text.contains("lost focus") || text.contains("in front") {
-            return "Another app came to the front during the run. Leave the Mac alone while a task runs, or turn off notifications for that app."
-        }
-        if text.contains("may already have") {
-            return "A step that sends or saves had already run, so check the app before running again, or it may happen twice."
-        }
-        return "Check the step it stopped at, then run again. Run history keeps the notes from each run."
+    /// Everything said about this stop, in one message to explain.
+    private var message: String {
+        [model.lastResult?.message, model.status].compactMap { $0 }.joined(separator: " ")
     }
+
+    private var explanation: Explanation { Explainer.explain(message) }
+
+    private var taskID: UUID? { stopped?.task.id ?? model.lastResult?.automationID }
 
     private var plainText: String {
         var lines = [state.word]
@@ -888,7 +890,30 @@ struct StatusDetails: View {
             if let note = model.runNotes[step.id] { lines.append(note) }
         }
         if let status = model.status, status != model.lastResult?.message { lines.append(status) }
+        let e = explanation
+        lines.append(e.headline + ". " + e.why)
+        lines += e.steps.enumerated().map { "\($0.offset + 1). \($0.element)" }
         return lines.joined(separator: "\n")
+    }
+}
+
+/// The fixes an explanation offers, as quiet text buttons. The first is the main one.
+struct FixButtons: View {
+    @EnvironmentObject var model: AppModel
+    let actions: [FixAction]
+    let task: UUID?
+    var limit = 3
+
+    var body: some View {
+        HStack(spacing: 16) {
+            ForEach(Array(actions.prefix(limit).enumerated()), id: \.offset) { i, action in
+                Button(action.label) { model.perform(action, task: task) }
+                    .buttonStyle(.plain)
+                    .font(.ui(12, i == 0 ? .semibold : .medium))
+                    .foregroundStyle(i == 0 ? AnyShapeStyle(Brand.cobalt) : AnyShapeStyle(HierarchicalShapeStyle.secondary))
+                    .disabled(model.runningID != nil || model.isRecording)
+            }
+        }
     }
 }
 
@@ -897,15 +922,17 @@ struct StatusDetails: View {
 struct StopReason: View {
     let reason: String
     var stoppedAt: Int?
-    var openHistory: () -> Void
+    let task: UUID
+    @State private var more = false
 
     var body: some View {
+        let e = Explainer.explain(reason)
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: RunState.failed.symbol)
                 .font(.ui(12, .semibold))
                 .foregroundStyle(RunState.failed.color)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(stoppedAt.map { "Stopped at step \($0)" } ?? "Why it stopped")
+            VStack(alignment: .leading, spacing: 5) {
+                Text((stoppedAt.map { "Stopped at step \($0). " } ?? "") + e.headline)
                     .font(.ui(12, .semibold))
                     .foregroundStyle(Brand.ink)
                 Text(reason)
@@ -913,12 +940,30 @@ struct StopReason: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
+                if more {
+                    Text(e.why)
+                        .font(.ui(12))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    ForEach(Array(e.steps.enumerated()), id: \.offset) { i, step in
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Text("\(i + 1)").font(.ui(11).monospacedDigit()).foregroundStyle(.tertiary)
+                            Text(step).font(.ui(12)).foregroundStyle(Brand.ink)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                HStack(spacing: 16) {
+                    FixButtons(actions: e.actions.filter { $0 != .runHistory }, task: task, limit: 2)
+                    Button(more ? "Less" : "What to do") { withAnimation(.easeOut(duration: 0.15)) { more.toggle() } }
+                        .buttonStyle(.plain)
+                        .font(.ui(12, .medium))
+                        .foregroundStyle(.secondary)
+                    FixButtons(actions: [.runHistory], task: task)
+                }
+                .padding(.top, 2)
             }
-            Spacer(minLength: 12)
-            Button("Run history", action: openHistory)
-                .buttonStyle(.plain)
-                .font(.ui(12, .medium))
-                .foregroundStyle(Brand.cobalt)
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, Metrics.gutter)
         .padding(.vertical, 12)
@@ -1835,6 +1880,12 @@ struct HistoryView: View {
             }
             .padding(.bottom, 14)
             Divider()
+            if !records.isEmpty {
+                Text("Click a run to see what to do about it and what each step did.")
+                    .font(.ui(11))
+                    .foregroundStyle(.tertiary)
+                    .padding(.vertical, 8)
+            }
             if records.isEmpty {
                 Text("No runs yet.")
                     .font(.ui(13))
@@ -1857,6 +1908,30 @@ struct HistoryView: View {
                             }
                             Text(r.outcome).font(.ui(12)).foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
+                                .textSelection(.enabled)
+                            if let t = r.trigger {
+                                Text(t == "schedule" ? "Started by its schedule" : "Started by another tool")
+                                    .font(.ui(11)).foregroundStyle(.tertiary)
+                            }
+                            if open == r.id, !r.succeeded {
+                                let e = Explainer.explain(r.outcome)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(e.headline).font(.ui(12, .semibold)).foregroundStyle(Brand.ink)
+                                    Text(e.why).font(.ui(12)).foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    ForEach(Array(e.steps.enumerated()), id: \.offset) { i, step in
+                                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                            Text("\(i + 1)").font(.ui(11).monospacedDigit()).foregroundStyle(.tertiary)
+                                            Text(step).font(.ui(12)).foregroundStyle(Brand.ink)
+                                                .fixedSize(horizontal: false, vertical: true)
+                                        }
+                                    }
+                                }
+                                .padding(.top, 6)
+                            }
+                            if open == r.id, !r.steps.isEmpty {
+                                Text("Each step").font(.ui(11, .semibold)).foregroundStyle(.secondary).padding(.top, 6)
+                            }
                             if open == r.id {
                                 ForEach(r.steps, id: \.index) { st in
                                     HStack(alignment: .firstTextBaseline, spacing: 8) {

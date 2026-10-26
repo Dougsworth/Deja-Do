@@ -131,6 +131,10 @@ final class AppModel: ObservableObject, @unchecked Sendable {
     @Published var beforeRepair: [UUID: ElementLocator] = [:]
     /// Run history sheet.
     @Published var historyFor: UUID?
+    /// Asks the main window to open Settings.
+    @Published var wantsSettings = false
+    /// Asks for the main window to be opened, from outside it (a notification click).
+    @Published var wantsWindow = false
     let history = RunHistory()
     /// Where finding a step wasn't straightforward, kept for tuning the matcher.
     let corpus = RepairCorpus()
@@ -214,10 +218,10 @@ final class AppModel: ObservableObject, @unchecked Sendable {
             case .missed(let slots):
                 update(a.id) { $0.schedule?.lastSlot = slots.last }
                 let when = slots.map { Self.timeFormatter.string(from: $0) }.joined(separator: ", ")
-                history.add(RunRecord(started: slots.last ?? now, duration: 0,
-                                      outcome: "Missed the scheduled run at \(when): the Mac was asleep or Deja Do wasn't open.",
-                                      succeeded: false, steps: [])
+                let missed = "Missed the scheduled run at \(when): the Mac was asleep or Deja Do wasn't open."
+                history.add(RunRecord(started: slots.last ?? now, duration: 0, outcome: missed, succeeded: false, steps: [])
                             .with(trigger: "schedule"), to: a.id)
+                Notify.problem(task: a, message: missed)
             case .run(let slot):
                 // Busy or locked: try again next check, while still within the hour.
                 guard !isBusy, !Self.screenLocked else { continue }
@@ -226,6 +230,7 @@ final class AppModel: ObservableObject, @unchecked Sendable {
                     history.add(RunRecord(started: now, duration: 0, outcome: "Didn't run on schedule. \(problem)",
                                           succeeded: false, steps: []).with(trigger: "schedule"), to: a.id)
                     status = "“\(a.name)” didn't run on schedule. \(problem)"
+                    Notify.problem(task: a, message: "Didn't run on schedule. \(problem)")
                     continue
                 }
                 status = "Running “\(a.name)” on schedule…"
@@ -236,6 +241,8 @@ final class AppModel: ObservableObject, @unchecked Sendable {
     }
 
     func setSchedule(_ id: UUID, _ schedule: Schedule?) {
+        // A scheduled run that fails says so with a banner, since nobody is watching.
+        if schedule?.on == true { Notify.ask() }
         update(id) { a in
             var s = schedule
             // A new or changed schedule starts counting from now, so it doesn't fire for times already gone.
@@ -475,6 +482,11 @@ final class AppModel: ObservableObject, @unchecked Sendable {
         guard hasAccessibility else {
             Permissions.requestAccessibility()
             status = "Allow Accessibility for Deja Do, then run it again."
+            if trigger != nil {
+                history.add(RunRecord(started: Date(), duration: 0, outcome: "Didn't run: Deja Do needs Accessibility permission.",
+                                      succeeded: false, steps: []).with(trigger: trigger), to: automation.id)
+                Notify.problem(task: automation, message: "Didn't run: Deja Do needs Accessibility permission.")
+            }
             return false
         }
         runningRow = 0
@@ -599,7 +611,7 @@ final class AppModel: ObservableObject, @unchecked Sendable {
             let finalOutcome = lastOutcome
             let finalRead = lastRead
             DispatchQueue.main.async { [weak self] in
-                self?.finishRun(id: id, failure: done, rows: total, read: finalRead)
+                self?.finishRun(id: id, failure: done, rows: total, read: finalRead, trigger: trigger)
                 if let onFinish, let finalRecord { onFinish(finalRecord, finalOutcome, finalRead) }
             }
         }
@@ -615,7 +627,7 @@ final class AppModel: ObservableObject, @unchecked Sendable {
 
     func stopRun() { replayer.cancel() }
 
-    private func finishRun(id: UUID, failure: String?, rows: Int = 1, read: [String: String] = [:]) {
+    private func finishRun(id: UUID, failure: String?, rows: Int = 1, read: [String: String] = [:], trigger: String? = nil) {
         stopEscapeMonitor()
         runningID = nil
         lastRead = read
@@ -627,6 +639,8 @@ final class AppModel: ObservableObject, @unchecked Sendable {
         if let failure {
             status = failure
             NSSound.beep()
+            // Nobody was watching a scheduled run or one another tool started.
+            if trigger != nil, let a = automations.first(where: { $0.id == id }) { Notify.problem(task: a, message: failure) }
         } else {
             var done = rows > 1 ? "Done. Ran all \(rows) rows." : "Done."
             if !read.isEmpty, rows == 1 {
@@ -805,6 +819,30 @@ final class AppModel: ObservableObject, @unchecked Sendable {
         }
     }
     private var saveTeachWatcher: Recorder?
+
+    // MARK: Fixes offered with an explanation
+
+    /// Carries out a fix offered under an explanation, for the task it's about.
+    func perform(_ action: FixAction, task id: UUID?) {
+        let task = id.flatMap { id in automations.first { $0.id == id } }
+        switch action {
+        case .accessibilitySettings: Permissions.openAccessibilitySettings()
+        case .inputMonitoringSettings: Permissions.openInputMonitoringSettings()
+        case .screenRecordingSettings: ScreenVision.openSettings()
+        case .somethingInTheWay: teachPopup()
+        case .openSettings: wantsSettings = true
+        case .runHistory: historyFor = id
+        case .runAgain: if let task { _ = run(task) }
+        case .checkSteps: if let task { check(task) }
+        case .keepGoingOnMismatch:
+            guard let stop = lastStop, stop.automationID == id else { return }
+            update(stop.automationID) { a in
+                guard a.steps.indices.contains(stop.step) else { return }
+                a.steps[stop.step].onMismatch = .keepGoing
+            }
+            status = "Step \(stop.step + 1) will now keep going when the screen looks different afterwards. You can change this under the step."
+        }
+    }
 
     func removePopup(_ rule: PopupRule, from id: UUID) {
         update(id) { a in a.popups?.removeAll { $0.id == rule.id } }

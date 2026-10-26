@@ -1,11 +1,34 @@
 import SwiftUI
 import AppKit
+import UserNotifications
 @preconcurrency import DejaDoCore
 
 /// Opens .dejado files double-clicked in Finder or dropped on the app.
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         if SelfTest.requested { SelfTest.start() } else { _ = Updates.shared }
+        UNUserNotificationCenter.current().delegate = self
+    }
+
+    /// Clicking a "didn't finish" banner opens Deja Do on that task.
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        let key = response.notification.request.content.userInfo[Notify.taskKey] as? String
+        DispatchQueue.main.async {
+            let model = AppModel.shared
+            if let key, let id = UUID(uuidString: key), model.automations.contains(where: { $0.id == id }) {
+                model.selection = id
+            }
+            model.wantsWindow = true
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        completionHandler()
+    }
+
+    /// Show banners even while Deja Do is in front.
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .sound])
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -52,6 +75,12 @@ struct MenuBarLabel: View {
 
     var body: some View {
         icon
+            .onChange(of: model.wantsWindow) { wants in
+                guard wants else { return }
+                model.wantsWindow = false
+                openWindow(id: "main")
+                NSApp.activate(ignoringOtherApps: true)
+            }
             .task {
                 guard !Self.openedAtLaunch else { return }
                 Self.openedAtLaunch = true
@@ -118,6 +147,12 @@ struct MenuContent: View {
         if let status = model.status {
             Divider()
             Text(status)
+        }
+        if let r = model.lastResult, r.ending == .failed, model.runningID == nil {
+            Button("Why “\(r.name)” Stopped…") {
+                model.selection = r.automationID
+                openMain()
+            }
         }
 
         Divider()
