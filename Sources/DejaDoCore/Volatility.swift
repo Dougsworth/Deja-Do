@@ -22,6 +22,12 @@ public enum Volatility {
         "just now", "typing", "online", "offline", "loading", "please wait", "sending", "sent", "delivered",
         "read", "seen", "connecting", "updating", "syncing", "saving", "saved", "away", "busy", "active now"
     ]
+    static let historyPrefixes = [
+        "undo", "redo", "repeat", "can't undo", "can't redo", "can't repeat", "can’t undo", "can’t redo", "can’t repeat",
+        "deshacer", "rehacer", "repetir", "no se puede deshacer", "no se puede rehacer", "no se puede repetir",
+        "annuler", "rétablir", "répéter", "rückgängig", "wiederholen", "wiederherstellen", "desfazer", "refazer",
+        "annulla", "ripeti", "ongedaan maken", "opnieuw"
+    ]
     static let months = ["jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
                          "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12]
     static let windowDays = 366.0
@@ -35,6 +41,8 @@ public enum Volatility {
         let words = lower.trimmingCharacters(in: CharacterSet(charactersIn: ".,:;!?…")).trimmingCharacters(in: .whitespaces)
         if relativeDays.contains(words) || states.contains(words) { return "state" }
         if lower.hasPrefix("last seen") || lower.hasPrefix("loading") || lower.hasPrefix("typing") { return "state" }
+        // Undo, Redo and Repeat buttons name the last thing done, which is history, not a result.
+        if historyPrefixes.contains(where: { lower == $0 || lower.hasPrefix($0 + " ") }) { return "edit history" }
         let range = NSRange(trimmed.startIndex..., in: trimmed)
         if clock.firstMatch(in: trimmed, range: range) != nil { return "clock" }
         if dotClock.firstMatch(in: trimmed, range: range) != nil { return "clock" }

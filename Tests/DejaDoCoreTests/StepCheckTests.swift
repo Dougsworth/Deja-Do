@@ -89,6 +89,15 @@ final class StepExpectationTests: XCTestCase {
         }
     }
 
+    func testUndoAndRepeatLabelsAreHistoryNotResults() {
+        for s in ["Can't Repeat", "Repeat New from Template", "Undo Typing", "Redo", "Can’t Undo", "Deshacer escritura", "Annuler la saisie"] {
+            XCTAssertTrue(StepVerifier.isVolatile(s), s)
+        }
+        for s in ["Undocumented", "Repeated orders", "Redondo", "Repetition report"] {
+            XCTAssertFalse(StepVerifier.isVolatile(s), s)
+        }
+    }
+
     func testWindowTitleAndAppSwitch() {
         let before = ScreenState(bundleID: "com.finder", windowTitle: "Downloads")
         let after = ScreenState(bundleID: "com.preview", windowTitle: "Report.pdf")

@@ -34,9 +34,20 @@ enum SlackSelfTest {
             if let p = sidebarPair() { pair = p; break }
         }
         guard let (first, second) = pair else {
-            let named = controls().filter { ($0.node.label ?? "").count >= 2 }.count
+            let all = controls()
+            let named = all.compactMap(\.node.label).filter { $0.count >= 2 }
+            var shape = "not running"
+            if let app = ElementFinder.runningApp(slackID) {
+                let el = AXUIElementCreateApplication(app.processIdentifier)
+                let ws = AX.elements(AX.raw(el, kAXWindowsAttribute))
+                shape = "\(ws.count) windows " + ws.map { w in
+                    let mini = (AX.raw(w, kAXMinimizedAttribute) as? Bool) == true ? " minimised" : ""
+                    let roles = AX.collect(from: w, origin: nil, limit: 3000) { _ in true }.count
+                    return "“\(AX.string(w, kAXTitleAttribute) ?? "")” \(roles) nodes\(mini)"
+                }.joined(separator: ", ")
+            }
             log.check("Slack: record and replay", true,
-                      "couldn't find two sidebar tabs (\(named) named controls; Slack may be signed out), skipped", counted: false)
+                      "couldn't find two sidebar tabs: \(shape); \(named.count) named controls: \(named.prefix(12).joined(separator: ", "))", counted: false)
             previous?.activate(options: [.activateIgnoringOtherApps])
             return
         }

@@ -182,7 +182,12 @@ enum AppsSelfTest {
         }
 
         // Replay into a fresh document.
-        guard await newDocument() else { log.check(prefix + "A second document opens", false); await closeDocuments(mine); return }
+        guard await newDocument() else {
+            log.check(prefix + "A second document opens", false,
+                      "front “\(frontTitle() ?? "none")”, windows: " + windowTitles().map { "“\($0)”" }.joined(separator: ", ")
+                      + (sheetShowing() ? ", a Save panel is still up" : ""))
+            await closeDocuments(mine); return
+        }
         if let t = frontTitle() { mine.insert(t) }
         let (error, notes) = await SelfTest.runTask(task, vision: vision)
         let once = occurrences(of: sentence) == 1
