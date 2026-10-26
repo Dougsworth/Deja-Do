@@ -15,7 +15,7 @@ final class WebhookServer: @unchecked Sendable {
         var tasks: () -> [WebhookAPI.TaskInfo]
         var busy: () -> Bool
         /// Starts the run and calls `done` on the main thread when it ends. Returns false if it couldn't start.
-        var start: (_ run: WebhookAPI.RunRequest, _ runID: UUID, _ done: @escaping (RunRecord, RunOutcome) -> Void) -> Bool
+        var start: (_ run: WebhookAPI.RunRequest, _ runID: UUID, _ done: @escaping (RunRecord, RunOutcome, [String: String]) -> Void) -> Bool
     }
 
     static let defaultPort: UInt16 = 7357
@@ -135,9 +135,9 @@ final class WebhookServer: @unchecked Sendable {
         var run = WebhookRun(id: runID, taskID: request.task.id, taskName: request.task.name)
         runs.put(run)
         let waiter = Waiter(connection: request.wait ? c : nil)
-        let started = hooks.start(request, runID) { [weak self] record, outcome in
+        let started = hooks.start(request, runID) { [weak self] record, outcome, values in
             guard let self else { return }
-            run.finish(record, outcome: outcome)
+            run.finish(record, outcome: outcome, values: values)
             self.runs.put(run)
             if let callback = request.callback { self.deliver(run, to: callback) }
             if let w = waiter.take() { self.send(.json(200, run.json), on: w) }

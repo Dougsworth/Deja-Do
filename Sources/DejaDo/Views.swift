@@ -135,6 +135,11 @@ struct MainView: View {
         .sheet(isPresented: Binding(get: { model.historyFor != nil }, set: { if !$0 { model.historyFor = nil } })) {
             if let id = model.historyFor { HistoryView(automationID: id).environmentObject(model) }
         }
+        .sheet(isPresented: Binding(get: { model.scheduleFor != nil }, set: { if !$0 { model.scheduleFor = nil } })) {
+            if let id = model.scheduleFor, let a = model.automations.first(where: { $0.id == id }) {
+                ScheduleView(automation: a).environmentObject(model)
+            }
+        }
     }
 
     /// The status bar only appears when there is something to say.
@@ -443,6 +448,7 @@ struct AutomationView: View {
                 }
                 Menu {
                     Button("Run for each row of a spreadsheet…") { model.runForEachRow(automation) }
+                    Button(automation.schedule?.on == true ? "Change schedule…" : "Run on a schedule…") { model.scheduleFor = automation.id }
                     Button("Run history…") { model.historyFor = automation.id }
                     Divider()
                     Button("Duplicate") { model.duplicate(automation.id) }
@@ -545,6 +551,9 @@ struct AutomationView: View {
         if !automation.variableNames.isEmpty {
             parts.append(Text(automation.variableNames.map { "{{\($0)}}" }.joined(separator: " "))
                 .foregroundColor(.accentColor))
+        }
+        if let next = model.nextRun(automation) {
+            parts.append(Text("next run \(next.formatted(.relative(presentation: .named)))"))
         }
         let line = parts.dropFirst().reduce(parts[0]) { $0 + Text("  ·  ") + $1 }
         return line
@@ -717,6 +726,7 @@ struct StepRow: View {
         case .wait: return true
         case .click, .key: return step.expect?.summary != nil
         case .activate: return false
+        case .read: return true
         }
     }
 
@@ -763,6 +773,22 @@ struct StepRow: View {
                 .padding(.top, 6)
                 .padding(.bottom, 2)
             }
+        case .read:
+            HStack(spacing: 8) {
+                Text("Keep it as").font(.rounded(12)).foregroundStyle(.secondary)
+                VStack(spacing: 3) {
+                    TextField("name", text: readName)
+                        .textFieldStyle(.plain)
+                        .font(.rounded(12))
+                    Divider()
+                }
+                .frame(maxWidth: 180)
+            }
+            .padding(.top, 6)
+            Text("Later steps can type {{\(readName.wrappedValue)}}, and tools that start this task get it back.")
+                .font(.rounded(11))
+                .foregroundStyle(.tertiary)
+                .padding(.bottom, 2)
         case .wait:
             Stepper(value: waitSeconds, in: 0.5...60, step: 0.5) {
                 Text("\(waitSeconds.wrappedValue, specifier: "%g") seconds")
@@ -805,6 +831,18 @@ struct StepRow: View {
         )
     }
 
+    private var readName: Binding<String> {
+        Binding(
+            get: { if case .read(_, let n) = step.kind { return n }; return "" },
+            set: { new in
+                if case .read(let t, _) = step.kind {
+                    let clean = new.replacingOccurrences(of: "{", with: "").replacingOccurrences(of: "}", with: "")
+                    step.kind = .read(target: t, name: clean.isEmpty ? "value" : clean)
+                }
+            }
+        )
+    }
+
     private var waitSeconds: Binding<Double> {
         Binding(
             get: { if case .wait(let s) = step.kind { return s }; return 1 },
@@ -841,7 +879,7 @@ struct RecordingView: View {
                 .keyboardShortcut(.return, modifiers: .command)
             }
 
-            Text("Do the task the way you normally would. Every click, keystroke and app switch becomes a step. Passwords are never recorded.")
+            Text("Do the task the way you normally would. Every click, keystroke and app switch becomes a step. Passwords are never recorded. To keep a value from the screen, like a total or an order number, point at it and press ⌃⌥R.")
                 .font(.rounded(13))
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: 560, alignment: .leading)
@@ -1072,6 +1110,11 @@ struct SettingsView: View {
 
             toggle("Let other apps and AI agents run tasks", isOn: $model.allowOtherApps,
                    note: "Tasks added as skills run through dejado:// links. When this is off, you're asked each time.")
+
+            Divider()
+
+            toggle("Open Deja Do when you log in", isOn: Binding(get: { model.openAtLogin }, set: { model.openAtLogin = $0 }),
+                   note: "So scheduled tasks still run after the Mac restarts. Deja Do sits in the menu bar.")
 
             Divider()
 
@@ -1397,5 +1440,144 @@ struct HistoryView: View {
         .frame(width: 560, height: 520)
         .fontDesign(.rounded)
         .onAppear { records = model.history.load(automationID) }
+    }
+}
+
+// MARK: - Schedule
+
+struct ScheduleView: View {
+    @EnvironmentObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    let automation: Automation
+    @State private var schedule: Schedule
+    @State private var time: Date
+
+    init(automation: Automation) {
+        self.automation = automation
+        let s = automation.schedule ?? Schedule(on: true)
+        _schedule = State(initialValue: s)
+        _time = State(initialValue: Calendar.current.date(bySettingHour: s.hour, minute: s.minute, second: 0, of: Date()) ?? Date())
+    }
+
+    private var problem: String? { Schedule.problem(for: automation, values: schedule.values) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Run “\(automation.name)” on a schedule")
+                .font(.rounded(17, .semibold))
+                .padding(.bottom, 16)
+            Divider()
+
+            Toggle("Run by itself", isOn: $schedule.on)
+                .font(.rounded(13))
+                .padding(.vertical, 14)
+            Divider()
+
+            row("Repeat") {
+                Picker("Repeat", selection: $schedule.repeats) {
+                    ForEach(Schedule.Repeat.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .fixedSize()
+            }
+            Divider()
+            row(schedule.repeats == .hourly ? "Starting at" : "At") {
+                DatePicker("Time", selection: $time, displayedComponents: .hourAndMinute)
+                    .labelsHidden()
+                    .fixedSize()
+            }
+            if schedule.repeats == .hourly {
+                Divider()
+                row("Every") {
+                    Stepper("\(schedule.everyHours) hour\(schedule.everyHours == 1 ? "" : "s")", value: $schedule.everyHours, in: 1...12)
+                        .font(.rounded(13))
+                        .fixedSize()
+                }
+                Divider()
+                row("Until") {
+                    Stepper("\(schedule.untilHour):00", value: $schedule.untilHour, in: 0...23)
+                        .font(.rounded(13))
+                        .fixedSize()
+                }
+            }
+
+            if !automation.variableNames.isEmpty {
+                Divider()
+                Text("Nobody will be there to fill these in, so they're kept with the schedule.")
+                    .font(.rounded(11))
+                    .foregroundStyle(.tertiary)
+                    .padding(.top, 14)
+                ForEach(automation.variableNames, id: \.self) { name in
+                    row("{{\(name)}}") {
+                        VStack(spacing: 3) {
+                            TextField("value", text: Binding(
+                                get: { schedule.values[name] ?? "" },
+                                set: { schedule.values[name] = $0 }))
+                                .textFieldStyle(.plain)
+                                .multilineTextAlignment(.trailing)
+                                .font(.rounded(13))
+                            Divider()
+                        }
+                        .frame(width: 200)
+                    }
+                }
+            }
+
+            Divider()
+            VStack(alignment: .leading, spacing: 4) {
+                if let problem, schedule.on {
+                    Text(problem).foregroundStyle(.orange)
+                } else if schedule.on, let next = preview.next(after: Date(), calendar: .current) {
+                    Text("Next run \(next.formatted(date: .abbreviated, time: .shortened)).")
+                }
+                Text("Runs while Deja Do is open and the screen is unlocked. A run missed while the Mac was asleep starts within the hour, or is noted in the run history.")
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .font(.rounded(11))
+            .padding(.vertical, 14)
+
+            HStack {
+                if automation.schedule != nil {
+                    Button("Remove schedule") {
+                        model.setSchedule(automation.id, nil)
+                        dismiss()
+                    }
+                    .buttonStyle(QuietButtonStyle(compact: true))
+                }
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .buttonStyle(QuietButtonStyle(compact: true))
+                Button("Save") {
+                    model.setSchedule(automation.id, preview)
+                    dismiss()
+                }
+                .buttonStyle(PrimaryButtonStyle(compact: true))
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(.top, 6)
+        }
+        .padding(26)
+        .frame(width: 460)
+        .fontDesign(.rounded)
+    }
+
+    private var preview: Schedule {
+        var s = schedule
+        let c = Calendar.current.dateComponents([.hour, .minute], from: time)
+        s.hour = c.hour ?? 9
+        s.minute = c.minute ?? 0
+        s.untilHour = max(s.untilHour, s.hour)
+        return s
+    }
+
+    @ViewBuilder private func row<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        HStack {
+            Text(title).font(.rounded(13))
+            Spacer()
+            content()
+        }
+        .padding(.vertical, 10)
     }
 }

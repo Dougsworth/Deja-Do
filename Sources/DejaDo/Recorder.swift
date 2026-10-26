@@ -229,12 +229,57 @@ final class Recorder: @unchecked Sendable {
         onChange?()
     }
 
+    /// ⌃⌥R, with nothing else held.
+    static func isReadHotkey(code: UInt16, flags: CGEventFlags) -> Bool {
+        code == 15 && flags.contains(.maskControl) && flags.contains(.maskAlternate)
+            && !flags.contains(.maskCommand) && !flags.contains(.maskShift)
+    }
+
+    /// Text read this way is described by where it sits and what's around it,
+    /// never by what it says, because what it says is the part that changes.
+    private func addRead(at point: CGPoint) {
+        guard !AX.isOwn(at: point), var locator = AX.capture(at: point)?.locator ?? AX.positionCapture(at: point)?.locator else {
+            NSSound.beep()
+            return
+        }
+        // Climbing to "the thing that acts" suits clicks; for reading, the text itself is the target.
+        if let hit = AX.element(at: point), AX.role(hit) == "AXStaticText",
+           let own = AX.makeLocator(for: hit, pid: AX.pid(hit), clickPoint: point) {
+            locator = own
+        }
+        locator.title = nil
+        locator.desc = nil
+        locator.value = nil
+        locator.label = nil
+        locator.help = nil
+        locator.visual = nil
+        locator.original = nil
+        // A label that would just be the value itself isn't a useful anchor either.
+        flushText()
+        noteApp(id: locator.bundleID, name: locator.appName)
+        let taken = steps.compactMap { step -> String? in
+            if case .read(_, let n) = step.kind { return n }
+            return nil
+        }
+        let name = Variables.suggestName(near: locator.anchors?.first?.label, taken: taken)
+        steps.append(Step(kind: .read(target: locator, name: name)))
+        NSSound(named: "Tink")?.play()
+        onChange?()
+    }
+
     private func handleKey(_ event: CGEvent) {
         if NSWorkspace.shared.frontmostApplication?.processIdentifier == ownPID { return }
         let code = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
         let flags = event.flags
         let commandLike = flags.contains(.maskCommand) || flags.contains(.maskControl)
         let ns = NSEvent(cgEvent: event)
+
+        // ⌃⌥R: keep the text under the pointer. Not recorded as a key press.
+        if Self.isReadHotkey(code: code, flags: flags) {
+            // Where the pointer is now, in the same top-left space Accessibility uses.
+            addRead(at: CGEvent(source: nil)?.location ?? event.location)
+            return
+        }
 
         if !commandLike, !KeyNames.special.contains(code), let chars = ns?.characters, isPrintable(chars) {
             if inSecureField { return }

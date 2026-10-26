@@ -283,3 +283,22 @@ final class AssistTests: XCTestCase {
         XCTAssertFalse(md.contains("CGRect") || md.contains("frameInWindow"))
     }
 }
+
+final class ConfirmedRepairTests: XCTestCase {
+    func loc(_ label: String, role: String = "AXButton") -> ElementLocator {
+        ElementLocator(bundleID: "com.apple.Safari", appName: "Safari", windowTitle: nil, role: role, subrole: nil, title: label,
+                       desc: nil, identifier: nil, help: nil, value: nil, label: label, path: [],
+                       frameInWindow: nil, clickOffset: CGPoint(x: 0.5, y: 0.5), inMenu: false)
+    }
+
+    func testARenameIsOnlyKeptOnceThePersonSaysYes() {
+        XCTAssertNil(HealGuard.repaired(loc("Send"), from: loc("Submit"), risky: true), "on its own, too different to trust")
+        let kept = HealGuard.repaired(loc("Send"), from: loc("Submit"), risky: true, confirmed: true)
+        XCTAssertEqual(kept?.label, "Send")
+        XCTAssertEqual(kept?.original?.label, "Submit", "still remembers what was first recorded")
+    }
+
+    func testEvenAYesDoesntTurnAButtonIntoSomethingElse() {
+        XCTAssertNil(HealGuard.repaired(loc("Send", role: "AXTextField"), from: loc("Submit"), risky: true, confirmed: true))
+    }
+}

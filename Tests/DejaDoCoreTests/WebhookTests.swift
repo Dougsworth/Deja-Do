@@ -175,8 +175,9 @@ final class WebhookTests: XCTestCase {
         let record = RunRecord(started: Date(timeIntervalSince1970: 1000), duration: 4.24, outcome: "Done.", succeeded: true,
                                steps: [.init(index: 0, summary: "Type into “Client”", note: nil, ran: true),
                                        .init(index: 1, summary: "Click button “Send”", note: "Screen matched", ran: true)])
-        run.finish(record, outcome: .finished)
+        run.finish(record, outcome: .finished, values: ["total": "5555"])
         let j = run.json
+        XCTAssertEqual(j["values"] as? [String: String], ["total": "5555"])
         XCTAssertEqual(j["status"] as? String, "succeeded")
         XCTAssertEqual(j["seconds"] as? Double, 4.2)
         XCTAssertEqual((j["steps"] as? [[String: Any]])?.last?["index"] as? Int, 2)

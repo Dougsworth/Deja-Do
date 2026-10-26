@@ -82,9 +82,18 @@ public enum HealGuard {
 
     /// The locator to save after a repair: the new one with the original identity kept,
     /// or nil when the repair drifted too far and the recording should stay as it was.
-    public static func repaired(_ new: ElementLocator, from old: ElementLocator, risky: Bool) -> ElementLocator? {
+    /// - Parameter confirmed: the person looked at this pick and said yes. Their
+    ///   say-so stands in for the text check, so a button renamed from "Submit"
+    ///   to "Send" is fixed for good instead of asked about every run. It still
+    ///   has to be the same kind of control.
+    public static func repaired(_ new: ElementLocator, from old: ElementLocator, risky: Bool,
+                                confirmed: Bool = false) -> ElementLocator? {
         let identity = old.identity
-        guard accepts(new, original: identity, risky: risky) else { return nil }
+        if confirmed {
+            guard identity.role == "AXPosition" || MatchEngine.roleCompatibility(identity.role, new.role) >= 0.6 else { return nil }
+        } else {
+            guard accepts(new, original: identity, risky: risky) else { return nil }
+        }
         var kept = new
         kept.original = identity
         kept.clickOffset = old.clickOffset

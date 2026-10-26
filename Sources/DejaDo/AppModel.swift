@@ -1,4 +1,5 @@
 import AppKit
+import ServiceManagement
 import SwiftUI
 import UniformTypeIdentifiers
 @preconcurrency import DejaDoCore
@@ -87,6 +88,11 @@ final class AppModel: ObservableObject, @unchecked Sendable {
         }
     }
     @Published var webhookToken: String = ""
+    /// What the last run read off the screen. Shown, never saved.
+    @Published var lastRead: [String: String] = [:]
+    /// The task whose schedule is being edited.
+    @Published var scheduleFor: UUID?
+    private var scheduleTimer: Timer?
     @Published var webhookStatus: String = ""
     let webhooks = WebhookServer()
 
@@ -176,6 +182,84 @@ final class AppModel: ObservableObject, @unchecked Sendable {
             self?.refreshPermissions()
         }
         updateWebhooks()
+        scheduleTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            self?.checkSchedules()
+        }
+    }
+
+    // MARK: Schedules
+
+    var isBusy: Bool { runningID != nil || isRecording || isChecking || isTeachingPopup || pendingRun != nil }
+
+    /// Runs whatever task is due. Called every half minute, and after the Mac wakes.
+    func checkSchedules(now: Date = Date()) {
+        for a in automations {
+            guard let sched = a.schedule, sched.on else { continue }
+            switch sched.due(at: now, calendar: .current, since: a.created) {
+            case .none:
+                continue
+            case .missed(let slots):
+                update(a.id) { $0.schedule?.lastSlot = slots.last }
+                let when = slots.map { Self.timeFormatter.string(from: $0) }.joined(separator: ", ")
+                history.add(RunRecord(started: slots.last ?? now, duration: 0,
+                                      outcome: "Missed the scheduled run at \(when): the Mac was asleep or Deja Do wasn't open.",
+                                      succeeded: false, steps: [])
+                            .with(trigger: "schedule"), to: a.id)
+            case .run(let slot):
+                // Busy or locked: try again next check, while still within the hour.
+                guard !isBusy, !Self.screenLocked else { continue }
+                update(a.id) { $0.schedule?.lastSlot = slot }
+                if let problem = Schedule.problem(for: a, values: sched.values) {
+                    history.add(RunRecord(started: now, duration: 0, outcome: "Didn't run on schedule. \(problem)",
+                                          succeeded: false, steps: []).with(trigger: "schedule"), to: a.id)
+                    status = "“\(a.name)” didn't run on schedule. \(problem)"
+                    continue
+                }
+                status = "Running “\(a.name)” on schedule…"
+                start(a, rows: [sched.values], trigger: "schedule")
+                return   // one at a time
+            }
+        }
+    }
+
+    func setSchedule(_ id: UUID, _ schedule: Schedule?) {
+        update(id) { a in
+            var s = schedule
+            // A new or changed schedule starts counting from now, so it doesn't fire for times already gone.
+            if s != nil, s?.lastSlot == nil || a.schedule?.repeats != s?.repeats || a.schedule?.hour != s?.hour || a.schedule?.minute != s?.minute {
+                s?.lastSlot = Date()
+            }
+            a.schedule = s
+        }
+        if schedule?.on == true, !openAtLogin { status = "Turn on “Open Deja Do when you log in” in Settings so scheduled tasks run after a restart." }
+    }
+
+    func nextRun(_ a: Automation) -> Date? { a.schedule?.next(after: Date(), calendar: .current) }
+
+    static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .none
+        f.timeStyle = .short
+        return f
+    }()
+
+    /// Nothing can be clicked or typed while the screen is locked.
+    static var screenLocked: Bool {
+        guard let d = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
+        return (d["CGSSessionScreenIsLocked"] as? Bool) == true || (d["CGSSessionScreenIsLocked"] as? Int) == 1
+    }
+
+    /// Opening at login, so schedules survive a restart.
+    var openAtLogin: Bool {
+        get { SMAppService.mainApp.status == .enabled }
+        set {
+            do {
+                if newValue { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+            } catch {
+                status = "Couldn't change opening at login: \(error.localizedDescription)"
+            }
+            objectWillChange.send()
+        }
     }
 
     // MARK: Webhooks
@@ -205,7 +289,7 @@ final class AppModel: ObservableObject, @unchecked Sendable {
             start: { [weak self] request, _, done in
                 guard let self, let a = self.automations.first(where: { $0.id == request.task.id }) else { return false }
                 self.status = "Another tool started “\(a.name)”."
-                return self.start(a, rows: [request.values], onFinish: done)
+                return self.start(a, rows: [request.values], trigger: "another tool", onFinish: done)
             })
         if webhooks.start(port: WebhookServer.defaultPort, token: webhookToken, hooks: hooks) {
             webhookStatus = "Listening at \(webhookURL), on this Mac only."
@@ -371,7 +455,8 @@ final class AppModel: ObservableObject, @unchecked Sendable {
 
     @discardableResult
     private func start(_ automation: Automation, rows: [[String: String]], from startRow: Int = 0,
-                       onFinish: ((RunRecord, RunOutcome) -> Void)? = nil) -> Bool {
+                       trigger: String? = nil,
+                       onFinish: ((RunRecord, RunOutcome, [String: String]) -> Void)? = nil) -> Bool {
         guard runningID == nil, !isRecording else { return false }
         refreshPermissions()
         guard hasAccessibility else {
@@ -434,6 +519,7 @@ final class AppModel: ObservableObject, @unchecked Sendable {
             var failure: String?
             var lastRecord: RunRecord?
             var lastOutcome: RunOutcome = .finished
+            var lastRead: [String: String] = [:]
             for r in firstRow..<rows.count {
                 let values = rows[r]
                 DispatchQueue.main.async { [weak self] in
@@ -460,9 +546,12 @@ final class AppModel: ObservableObject, @unchecked Sendable {
                                           note: notes[i]?.joined(separator: " · "),
                                           ran: stop.map { i <= $0.step } ?? true)
                     })
-                history.add(record, to: id)
-                lastRecord = record
+                var kept = record
+                kept.trigger = trigger
+                history.add(kept, to: id)
+                lastRecord = kept
                 lastOutcome = stop?.outcome ?? .finished
+                lastRead = replayer.readValues
 
                 if let stop {
                     let where_ = total > 1 ? "Stopped at row \(r + 1) of \(total): " : ""
@@ -484,9 +573,10 @@ final class AppModel: ObservableObject, @unchecked Sendable {
             let done = failure
             let finalRecord = lastRecord
             let finalOutcome = lastOutcome
+            let finalRead = lastRead
             DispatchQueue.main.async { [weak self] in
-                self?.finishRun(id: id, failure: done, rows: total)
-                if let onFinish, let finalRecord { onFinish(finalRecord, finalOutcome) }
+                self?.finishRun(id: id, failure: done, rows: total, read: finalRead)
+                if let onFinish, let finalRecord { onFinish(finalRecord, finalOutcome, finalRead) }
             }
         }
         return true
@@ -501,14 +591,18 @@ final class AppModel: ObservableObject, @unchecked Sendable {
 
     func stopRun() { replayer.cancel() }
 
-    private func finishRun(id: UUID, failure: String?, rows: Int = 1) {
+    private func finishRun(id: UUID, failure: String?, rows: Int = 1, read: [String: String] = [:]) {
         stopEscapeMonitor()
         runningID = nil
+        lastRead = read
         if let failure {
             status = failure
             NSSound.beep()
         } else {
             status = rows > 1 ? "Done. Ran all \(rows) rows." : "Done."
+            if !read.isEmpty, rows == 1 {
+                status += " Read " + read.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value.prefix(60))" }.joined(separator: ", ") + "."
+            }
         }
         let duration = runStarted.map { Date().timeIntervalSince($0) }
         update(id) { a in

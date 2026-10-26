@@ -175,6 +175,10 @@ public struct Step: Identifiable, Codable, Equatable {
         case type(text: String, askEachRun: Bool, secret: Bool, prompt: String)
         case key(code: UInt16, modifiers: UInt64, label: String)
         case wait(seconds: Double)
+        /// Keeps the text shown at a spot on screen in `{{name}}`, for later
+        /// steps to type and for the run's result. The locator describes the
+        /// spot by its surroundings, never by the text itself, which changes.
+        case read(target: ElementLocator, name: String)
     }
 }
 
@@ -197,8 +201,11 @@ public struct Automation: Identifiable, Codable, Equatable {
     public var popups: [PopupRule]?
     /// File format, so a newer Deja Do's files fail clearly instead of half loading.
     public var format: Int?
+    /// When the task runs by itself, if it does.
+    public var schedule: Schedule?
 
-    public static let currentFormat = 2
+    /// 3 added read steps and schedules.
+    public static let currentFormat = 3
 
     public init(id: UUID = UUID(), name: String, steps: [Step], created: Date = Date(),
                 lastRun: Date? = nil, runs: Int = 0, repairs: Int = 0,
@@ -225,6 +232,7 @@ extension Step {
         case .type(_, _, let secret, _): return secret ? "lock" : "character.cursor.ibeam"
         case .key: return "command"
         case .wait: return "clock"
+        case .read: return "text.viewfinder"
         }
     }
 
@@ -256,10 +264,14 @@ extension Step {
             return "Press \(label)"
         case .wait(let s):
             return "Wait \(Self.seconds(s)) seconds"
+        case .read(let t, let name):
+            if let near = t.anchors?.first { return "Read the text near “\(near.label.prefix(40))” into {{\(name)}}" }
+            return "Read the \(Self.friendlyRole(t.role, subrole: t.subrole)) into {{\(name)}}"
         }
     }
 
     public var detail: String? {
+        if case .read(let t, _) = kind { return t.appName }
         if case .click(let t, _, _, _) = kind {
             if let w = t.windowTitle, !w.isEmpty, w != t.appName { return "\(t.appName), \(w)" }
             return t.appName

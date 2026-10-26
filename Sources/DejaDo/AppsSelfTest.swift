@@ -166,6 +166,7 @@ enum AppsSelfTest {
             case .key: return "key"
             case .activate: return "activate"
             case .wait: return "wait"
+            case .read: return "read"
             }
         }
         log.check(prefix + "Recorded a click, typing and two key presses", kinds.filter { $0 == "type" }.count == 1 && kinds.filter { $0 == "key" }.count == 2,
