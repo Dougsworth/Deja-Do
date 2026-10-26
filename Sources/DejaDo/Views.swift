@@ -485,6 +485,19 @@ struct StatusBar: View {
 struct AutomationView: View {
     @EnvironmentObject var model: AppModel
     @Binding var automation: Automation
+
+    /// Finishes any edit still in a field, so a run uses what's on screen.
+    private func afterEditing(_ action: @escaping (Automation) -> Void) {
+        NSApp.keyWindow?.makeFirstResponder(nil)
+        let id = automation.id
+        let model = model
+        Task { @MainActor in
+            // The field saves when it loses focus, on the next pass of the run loop.
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            if let latest = model.automations.first(where: { $0.id == id }) { action(latest) }
+        }
+    }
+
     /// The step whose settings are open. One at a time keeps the list calm.
     @State private var expanded: UUID?
 
@@ -501,7 +514,7 @@ struct AutomationView: View {
                 }
             } actions: {
                 if !isRunning {
-                    Button(model.isChecking ? "Checking…" : "Check") { model.check(automation) }
+                    Button(model.isChecking ? "Checking…" : "Check") { afterEditing { model.check($0) } }
                         .buttonStyle(QuietButtonStyle(compact: true))
                         .disabled(model.runningID != nil || model.isRecording || model.isChecking)
                         .help("Look for every button on screen now, without clicking or typing anything")
@@ -512,7 +525,7 @@ struct AutomationView: View {
                     }
                     .buttonStyle(QuietButtonStyle(compact: true))
                 } else {
-                    Button { model.run(automation) } label: {
+                    Button { afterEditing { _ = model.run($0) } } label: {
                         Label("Run", systemImage: "play.fill").labelStyle(.titleAndIcon)
                     }
                     .buttonStyle(PrimaryButtonStyle(compact: true))
@@ -520,7 +533,7 @@ struct AutomationView: View {
                     .disabled(model.runningID != nil || model.isRecording)
                 }
                 Menu {
-                    Button("Run for each row of a spreadsheet…") { model.runForEachRow(automation) }
+                    Button("Run for each row of a spreadsheet…") { afterEditing { model.runForEachRow($0) } }
                     Button(automation.schedule?.on == true ? "Change schedule…" : "Run on a schedule…") { model.scheduleFor = automation.id }
                     Button("Run history…") { model.historyFor = automation.id }
                     Divider()
@@ -756,6 +769,34 @@ extension Step {
     }
 }
 
+/// A text field inside the step list that keeps what you type to itself
+/// until you press Return or click away. Writing every keystroke straight
+/// into the task makes the list reload its rows, which takes the cursor out
+/// of the field after one letter.
+struct DraftField: View {
+    let placeholder: String
+    @Binding var text: String
+    var font: Font = .ui(12)
+    @State private var draft = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField(placeholder, text: $draft)
+            .textFieldStyle(.plain)
+            .font(font)
+            .focused($focused)
+            .onAppear { draft = text }
+            .onChange(of: text) { new in if !focused { draft = new } }
+            .onChange(of: focused) { now in if !now { commit() } }
+            .onSubmit { commit() }
+            .onDisappear { commit() }
+    }
+
+    private func commit() {
+        if draft != text { text = draft }
+    }
+}
+
 struct StepRow: View {
     @Binding var step: Step
     let number: Int
@@ -808,9 +849,7 @@ struct StepRow: View {
         case .type(_, _, let secret, _) where !secret:
             HStack(spacing: 18) {
                 VStack(spacing: 3) {
-                    TextField("Text to type", text: typedText)
-                        .textFieldStyle(.plain)
-                        .font(.ui(12))
+                    DraftField(placeholder: "Text to type", text: typedText)
                         .disabled(askEachRun.wrappedValue)
                     Divider()
                 }
@@ -850,9 +889,7 @@ struct StepRow: View {
             HStack(spacing: 8) {
                 Text("Keep it as").font(.ui(12)).foregroundStyle(.secondary)
                 VStack(spacing: 3) {
-                    TextField("name", text: readName)
-                        .textFieldStyle(.plain)
-                        .font(.ui(12))
+                    DraftField(placeholder: "name", text: readName)
                     Divider()
                 }
                 .frame(maxWidth: 180)
