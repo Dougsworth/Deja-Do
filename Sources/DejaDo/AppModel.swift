@@ -599,10 +599,12 @@ final class AppModel: ObservableObject, @unchecked Sendable {
             status = failure
             NSSound.beep()
         } else {
-            status = rows > 1 ? "Done. Ran all \(rows) rows." : "Done."
+            var done = rows > 1 ? "Done. Ran all \(rows) rows." : "Done."
             if !read.isEmpty, rows == 1 {
-                status += " Read " + read.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value.prefix(60))" }.joined(separator: ", ") + "."
+                let pairs = read.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value.prefix(60))" }
+                done += " Read " + pairs.joined(separator: ", ") + "."
             }
+            status = done
         }
         let duration = runStarted.map { Date().timeIntervalSince($0) }
         update(id) { a in
