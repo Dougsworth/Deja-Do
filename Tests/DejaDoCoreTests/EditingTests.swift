@@ -23,8 +23,15 @@ final class EditingTests: XCTestCase {
         XCTAssertEqual(l.frameInWindow, chat("Kris").frameInWindow)
     }
 
-    func testRenameKeepsAnUnrelatedIdentifier() {
-        XCTAssertEqual(chat("Kris", identifier: "row-7").renamed(to: "Mum").identifier, "row-7")
+    func testRenameDropsWhatTiedItToTheOldOne() {
+        var l = chat("Kris", identifier: "row-7")
+        l.path = [PathStep(role: "AXRow", index: 7)]
+        l.anchors = [Anchor(label: "Pinned", role: "AXStaticText", offset: CGPoint(x: 0, y: -30))]
+        let r = l.renamed(to: "Mum")
+        XCTAssertNil(r.identifier)
+        XCTAssertTrue(r.path.isEmpty)
+        XCTAssertNil(r.anchors)
+        XCTAssertEqual(r.role, "AXButton")
     }
 
     func testEmptyOrSameNameChangesNothing() {
@@ -47,5 +54,64 @@ final class EditingTests: XCTestCase {
         XCTAssertEqual(renamed.expect?.appeared.map(\.text), ["Mum", "online"])
         XCTAssertEqual(renamed.summary, "Click button “Mum”")
         XCTAssertEqual(renamed.id, step.id)
+    }
+}
+
+final class EditFollowThroughTests: XCTestCase {
+    private func task() -> Automation {
+        var click = Step(kind: .key(code: 36, modifiers: 0, label: "Return"))
+        click.expect = StepExpectation(appeared: [ExpectedText("thank u cuty", typed: true)], changed: true)
+        var first = Step(kind: .type(text: "thank u cuty", askEachRun: false, secret: false, prompt: ""))
+        first.expect = StepExpectation(appeared: [ExpectedText("Kris")], changed: true)
+        return Automation(name: "t", steps: [Step(kind: .wait(seconds: 1)), first, click])
+    }
+
+    func testEditedTextIsWhatLaterStepsExpect() {
+        var a = task()
+        a.noteEdit(at: 1, replacing: "thank u cuty", with: "on my way")
+        XCTAssertEqual(a.steps[2].expect?.appeared.first?.text, "on my way")
+        XCTAssertEqual(a.steps[2].recheck, true)
+        XCTAssertEqual(a.steps[1].recheck, true)
+        XCTAssertNil(a.steps[0].recheck, "steps before the edit keep their checks as they are")
+    }
+
+    func testAStructuralEditMarksLaterChecksOnly() {
+        var a = task()
+        a.noteEdit(at: 2)
+        XCTAssertNil(a.steps[1].recheck)
+        XCTAssertEqual(a.steps[2].recheck, true)
+        XCTAssertEqual(a.steps[2].expect?.appeared.first?.text, "thank u cuty")
+    }
+
+    func testOutOfRangeIsIgnored() {
+        var a = task()
+        let before = a
+        a.noteEdit(at: 9)
+        XCTAssertEqual(a, before)
+    }
+
+    func testOldTasksStillLoad() throws {
+        let a = task()
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(a)) as! [String: Any]
+        var steps = json["steps"] as! [[String: Any]]
+        for i in steps.indices { steps[i].removeValue(forKey: "recheck") }
+        json["steps"] = steps
+        let back = try JSONDecoder().decode(Automation.self, from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertEqual(back.steps.count, 3)
+        XCTAssertNil(back.steps[2].recheck)
+    }
+}
+
+final class ExpectationSwapTests: XCTestCase {
+    func testShortNamesOnlySwapWholeTexts() {
+        let e = StepExpectation(appeared: [ExpectedText("8"), ExpectedText("18:05")], changed: true)
+        XCTAssertEqual(e.replacing("8", with: "9").appeared.map(\.text), ["9", "18:05"])
+    }
+
+    func testLongerTextSwapsInsideOtherText() {
+        let e = StepExpectation(appeared: [ExpectedText("You: thank u cuty")], windowTitle: "Kris", changed: true)
+        let r = e.replacing("thank u cuty", with: "on my way")
+        XCTAssertEqual(r.appeared.first?.text, "You: on my way")
+        XCTAssertEqual(r.windowTitle, "Kris")
     }
 }

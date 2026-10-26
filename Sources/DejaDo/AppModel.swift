@@ -523,7 +523,17 @@ final class AppModel: ObservableObject, @unchecked Sendable {
                     DispatchQueue.main.async { cont.resume(returning: Prompt.confirm(question, detail: detail)) }
                 }
             },
-            record: { [corpus] r in corpus.add(r) }
+            record: { [corpus] r in corpus.add(r) },
+            relearned: { [weak self] index, fresh in
+                DispatchQueue.main.async {
+                    guard let self, index < stepIDs.count else { return }
+                    self.update(id) { a in
+                        guard let j = a.steps.firstIndex(where: { $0.id == stepIDs[index] }) else { return }
+                        if let fresh { a.steps[j].expect = fresh }
+                        a.steps[j].recheck = nil
+                    }
+                }
+            }
         )
         let replayer = self.replayer
         let total = rows.count

@@ -578,7 +578,8 @@ struct AutomationView: View {
                     StepRow(step: $step, number: n, state: state(for: n - 1), note: model.runNotes[step.id],
                             expanded: expanded == step.id, risk: automation.risk(at: n - 1),
                             trimReason: trimReasons[step.id], onRemove: { remove(step) },
-                            onKeep: { model.dismissSuggestion(step.id) }) {
+                            onKeep: { model.dismissSuggestion(step.id) },
+                            onEdited: { old, new in edited(step.id, old, new) }) {
                         withAnimation(.easeOut(duration: 0.15)) { expanded = expanded == step.id ? nil : step.id }
                     }
                         .listRowSeparator(.visible)
@@ -586,6 +587,7 @@ struct AutomationView: View {
                         .contextMenu {
                             Button(step.isEnabled ? "Skip this step" : "Don't skip this step") {
                                 setStep(step.id) { $0.disabled = $0.isEnabled ? true : nil }
+                                edited(step.id, nil, nil)
                             }
                             if Self.canBeRisky(step) {
                                 let risky = automation.risk(at: n - 1).risk == .risky
@@ -602,8 +604,14 @@ struct AutomationView: View {
                             Button("Delete step", role: .destructive) { remove(step) }
                         }
                 }
-                .onMove { automation.steps.move(fromOffsets: $0, toOffset: $1) }
-                .onDelete { automation.steps.remove(atOffsets: $0) }
+                .onMove { from, to in
+                    automation.steps.move(fromOffsets: from, toOffset: to)
+                    automation.noteEdit(at: min(from.min() ?? to, to))
+                }
+                .onDelete { offsets in
+                    automation.steps.remove(atOffsets: offsets)
+                    automation.noteEdit(at: offsets.min() ?? 0)
+                }
                 if !automation.steps.isEmpty && model.runningID == nil {
                     Text("Click a step to change it. Drag to reorder, or right click to skip, delete or add a step.")
                         .font(.ui(11))
@@ -698,7 +706,15 @@ struct AutomationView: View {
     }
 
     private func remove(_ step: Step) {
-        automation.steps.removeAll { $0.id == step.id }
+        guard let i = automation.steps.firstIndex(where: { $0.id == step.id }) else { return }
+        automation.steps.remove(at: i)
+        automation.noteEdit(at: i)
+    }
+
+    /// Later checks follow a hand edit, or are learned again on the next run.
+    private func edited(_ id: UUID, _ old: String?, _ new: String?) {
+        guard let i = automation.steps.firstIndex(where: { $0.id == id }) else { return }
+        automation.noteEdit(at: i, replacing: old, with: new)
     }
 
     private func insertWait(after step: Step) {
@@ -712,6 +728,7 @@ struct AutomationView: View {
         guard let i = automation.steps.firstIndex(where: { $0.id == step.id }) else { return }
         let text = Step(kind: .type(text: "", askEachRun: false, secret: false, prompt: ""))
         automation.steps.insert(text, at: i + 1)
+        automation.noteEdit(at: i + 1)
         expanded = text.id
     }
 }
@@ -883,6 +900,8 @@ struct StepRow: View {
     var trimReason: String? = nil
     var onRemove: () -> Void = {}
     var onKeep: () -> Void = {}
+    /// The step was changed by hand; old and new are the text that changed, if any.
+    var onEdited: (_ old: String?, _ new: String?) -> Void = { _, _ in }
     var toggle: () -> Void = {}
 
     var body: some View {
@@ -964,7 +983,9 @@ struct StepRow: View {
                 HStack(spacing: 8) {
                     Text("Keys").font(.ui(12)).foregroundStyle(.secondary)
                     KeyCatcher(label: label, code: code, modifiers: mods) { c, m, l in
+                        guard c != code || m != mods else { return }
                         step.kind = .key(code: c, modifiers: m, label: l)
+                        onEdited(nil, nil)
                     }
                 }
                 .padding(.top, 6)
@@ -1021,8 +1042,9 @@ struct StepRow: View {
         Binding(
             get: { if case .type(let t, _, _, _) = step.kind { return t }; return "" },
             set: { new in
-                if case .type(_, let a, let s, let p) = step.kind {
+                if case .type(let old, let a, let s, let p) = step.kind, old != new {
                     step.kind = .type(text: new, askEachRun: a, secret: s, prompt: p)
+                    onEdited(old, new)
                 }
             }
         )
@@ -1031,7 +1053,13 @@ struct StepRow: View {
     private var targetName: Binding<String> {
         Binding(
             get: { step.targetName ?? "" },
-            set: { step = step.renamingTarget(to: $0) }
+            set: { new in
+                let old = step.targetName
+                let renamed = step.renamingTarget(to: new)
+                guard renamed != step else { return }
+                step = renamed
+                onEdited(old, renamed.targetName)
+            }
         )
     }
 

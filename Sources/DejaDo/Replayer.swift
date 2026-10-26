@@ -42,6 +42,8 @@ final class Replayer: @unchecked Sendable {
         var confirm: (_ question: String, _ detail: String) async -> Bool = { _, _ in true }
         /// A moment where finding a step wasn't straightforward, for the repair corpus.
         var record: (RepairRecord) -> Void = { _ in }
+        /// A step changed by hand has had its check confirmed (nil) or learned again.
+        var relearned: (_ stepIndex: Int, _ expect: StepExpectation?) -> Void = { _, _ in }
     }
 
     private let lock = NSLock()
@@ -399,6 +401,7 @@ final class Replayer: @unchecked Sendable {
             case .proceed(let extra):
                 if result.verdict == .passed, e.hasChecks { note(i, "Screen matched") }
                 if let extra { note(i, extra) }
+                if step.recheck == true { callbacks.relearned(i, nil) }
                 return
             case .recheck(let delay):
                 try await pause(delay)
@@ -409,6 +412,12 @@ final class Replayer: @unchecked Sendable {
                 try await pause(0.08)
                 await settleFrontmost(maxWait: 2.0)
             case .stop(let reason):
+                // Changed by hand since this check was learned: what it shows now is the new normal.
+                if step.recheck == true, let before {
+                    callbacks.relearned(i, StepExpectation.derive(before: before, after: after))
+                    note(i, "Looked different since you edited the task, so it learned what this step shows now")
+                    return
+                }
                 note(i, reason)
                 throw ReplayError("Stopped at step \(i + 1): \(reason). Change what happens on a mismatch under the step if this is expected.")
             }

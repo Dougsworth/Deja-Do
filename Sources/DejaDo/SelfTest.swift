@@ -142,6 +142,18 @@ enum SelfTest {
         // 2. Replay as recorded.
         await replay(task, name: "Replay", expect: "15", vision: vision, log: log)
 
+        // 2b. Edited by hand: the 8 renamed to 9. The click finds 9, and the
+        // = step, which expected 15, learns 16 instead of stopping the run.
+        var edited = task
+        if let i = edited.steps.lastIndex(where: { $0.targetName == "8" }) {
+            let old = edited.steps[i].targetName
+            edited.steps[i] = edited.steps[i].renamingTarget(to: "9")
+            edited.noteEdit(at: i, replacing: old, with: "9")
+        }
+        log.check("Renaming a click from 8 to 9 changes the step", edited.steps.contains { $0.summary.contains("“9”") },
+                  edited.steps.map(\.summary).joined(separator: " | "))
+        await replay(edited, name: "Replay after renaming 8 to 9", expect: "16", vision: vision, log: log)
+
         // 3. Replay after the layout changes: buttons move and resize.
         await setMode(basic: false)
         await replay(task, name: "Replay in Scientific layout", expect: "15", vision: vision, log: log)

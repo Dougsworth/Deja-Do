@@ -14,10 +14,9 @@ extension ElementLocator {
     /// The same target, looked for by a different name: the “Kris” chat
     /// becomes the “Mum” chat, with everything else about it kept.
     ///
-    /// Every text that said the old name says the new one. The recorded
-    /// picture and any id that carries the old name are dropped, since both
-    /// would lead back to the old button. The new name becomes what repairs
-    /// are held to, because the person chose it.
+    /// Every text that said the old name says the new one. What tied it to
+    /// the old button in particular is dropped, so the name decides. The new
+    /// name becomes what repairs are held to, because the person chose it.
     public func renamed(to newName: String) -> ElementLocator {
         let new = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !new.isEmpty, let old = editableName, old != new else { return self }
@@ -26,15 +25,16 @@ extension ElementLocator {
             return s.compare(old, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
         }
         var l = self
-        if same(l.label) { l.label = new }
         if same(l.title) { l.title = new }
         if same(l.desc) { l.desc = new }
         if same(l.value) { l.value = new }
         if same(l.help) { l.help = new }
         l.label = new
-        if let id = l.identifier, id.range(of: old, options: [.caseInsensitive, .diacriticInsensitive]) != nil {
-            l.identifier = nil
-        }
+        // The id, the place in the tree, the labels that sat beside it and the
+        // picture all describe the old one, and would pull the match back to it.
+        l.identifier = nil
+        l.path = []
+        l.anchors = nil
         l.visual = nil
         l.original = nil
         return l
@@ -59,15 +59,46 @@ extension Step {
         guard !new.isEmpty, new != old else { return self }
         var s = self
         s.kind = .click(target: t.renamed(to: new), button: button, count: count, modifiers: mods)
-        func swap(_ text: String) -> String {
-            text.replacingOccurrences(of: old, with: new, options: [.caseInsensitive, .diacriticInsensitive])
-        }
-        if var e = s.expect {
-            e.appeared = e.appeared.map { var x = $0; x.text = swap(x.text); return x }
-            e.vanished = e.vanished.map(swap)
-            e.windowTitle = e.windowTitle.map(swap)
-            s.expect = e
-        }
+        if let e = s.expect { s.expect = e.replacing(old, with: new) }
         return s
+    }
+}
+
+extension StepExpectation {
+    /// The same check with one piece of text swapped for another, wherever it shows up.
+    public func replacing(_ old: String, with new: String) -> StepExpectation {
+        guard !old.isEmpty, old != new else { return self }
+        let options: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
+        func swap(_ text: String) -> String {
+            // A short name like “8” is only swapped where it's the whole text, not inside “18:05”.
+            if old.count < 3 {
+                return text.trimmingCharacters(in: .whitespaces).compare(old, options: options) == .orderedSame ? new : text
+            }
+            return text.replacingOccurrences(of: old, with: new, options: options)
+        }
+        var e = self
+        e.appeared = e.appeared.map { var x = $0; x.text = swap(x.text); return x }
+        e.vanished = e.vanished.map(swap)
+        e.windowTitle = e.windowTitle.map(swap)
+        return e
+    }
+}
+
+extension Automation {
+    /// Call after the person changes, adds, removes or moves a step by hand.
+    ///
+    /// Steps from `index` on may have expected what the old version produced.
+    /// Where the change is a piece of text (a new name to click, new words to
+    /// type), their checks follow it. Anything that can't be traced, like a
+    /// total that now comes out different, is learned again on the next run
+    /// rather than stopping it.
+    public mutating func noteEdit(at index: Int, replacing old: String? = nil, with new: String? = nil) {
+        guard index < steps.count else { return }
+        for j in max(0, index)..<steps.count {
+            guard var e = steps[j].expect else { continue }
+            if let old, let new { e = e.replacing(old, with: new) }
+            steps[j].expect = e
+            steps[j].recheck = true
+        }
     }
 }

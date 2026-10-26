@@ -155,6 +155,10 @@ public struct Step: Identifiable, Codable, Equatable {
     public var disabled: Bool?
     /// Recording looked before and after this step and saw nothing change.
     public var noEffect: Bool?
+    /// The task was changed by hand at or before this step since its check was
+    /// learned, so what it expects may be out of date. The next run learns it
+    /// again instead of stopping on it.
+    public var recheck: Bool?
 
     public init(id: UUID = UUID(), kind: Kind, expect: StepExpectation? = nil, onMismatch: MismatchPolicy? = nil,
                 risk: StepRisk? = nil, fieldLabel: String? = nil, disabled: Bool? = nil) {
