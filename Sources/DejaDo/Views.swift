@@ -498,6 +498,23 @@ struct AutomationView: View {
         }
     }
 
+    /// Why the last run of this task failed, from this session or its saved history.
+    @State private var savedReason: String?
+
+    private var failureReason: String? {
+        guard !isRunning, automation.lastSucceeded == false else { return nil }
+        if let r = model.lastResult, r.automationID == automation.id {
+            return r.ending == .completed || r.message.isEmpty ? nil : r.message
+        }
+        return savedReason
+    }
+
+    /// The step the last run stopped on, counted from 1.
+    private var stoppedStep: Int? {
+        guard let s = model.lastStop, s.automationID == automation.id else { return nil }
+        return s.step + 1
+    }
+
     /// The step whose settings are open. One at a time keeps the list calm.
     @State private var expanded: UUID?
 
@@ -565,6 +582,11 @@ struct AutomationView: View {
             // A plain stack rather than a List: the Mac's list takes the clicks
             // meant for text fields inside its rows, so a step's name or text
             // couldn't be clicked into and changed.
+            if let reason = failureReason {
+                StopReason(reason: reason, stoppedAt: stoppedStep) { model.historyFor = automation.id }
+                Divider()
+            }
+
             // Worked out once per update, not once per step.
             let trims = trimReasons
             ScrollView {
@@ -611,6 +633,10 @@ struct AutomationView: View {
                 }
                 .padding(.bottom, 24)
             }
+        }
+        .task(id: automation.lastRun) {
+            let id = automation.id, history = model.history
+            savedReason = await Task.detached { history.load(id).first?.outcome }.value
         }
     }
 
@@ -748,6 +774,39 @@ struct AutomationView: View {
 }
 
 enum StepState { case idle, current, done }
+
+/// Why the last run stopped, in full, under the task's title. Stays until the
+/// next run, so it's there when you come back to the task.
+struct StopReason: View {
+    let reason: String
+    var stoppedAt: Int?
+    var openHistory: () -> Void
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: RunState.failed.symbol)
+                .font(.ui(12, .semibold))
+                .foregroundStyle(RunState.failed.color)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(stoppedAt.map { "Stopped at step \($0)" } ?? "Why it stopped")
+                    .font(.ui(12, .semibold))
+                    .foregroundStyle(Brand.ink)
+                Text(reason)
+                    .font(.ui(12))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+            Spacer(minLength: 12)
+            Button("Run history", action: openHistory)
+                .buttonStyle(.plain)
+                .font(.ui(12, .medium))
+                .foregroundStyle(Brand.cobalt)
+        }
+        .padding(.horizontal, Metrics.gutter)
+        .padding(.vertical, 12)
+    }
+}
 
 /// One numbered row in a step table. Used for saved and live steps alike.
 struct StepLine<Editor: View>: View {
